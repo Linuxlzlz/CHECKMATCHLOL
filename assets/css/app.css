@@ -317,6 +317,38 @@ button { font: inherit; cursor: pointer; }
 .layer-row:first-child { border-top: 0; }
 .layer-reason { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
 
+/* detalle por jugador */
+.detail-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.detail-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-mute); padding: 0 7px 6px; font-weight: 700; white-space: nowrap;
+}
+.detail-table td { padding: 6px 7px; border-top: 1px solid var(--line-soft); vertical-align: middle; }
+.detail-table .num { font-family: var(--mono); font-size: 11.5px; text-align: right; white-space: nowrap; }
+.items { display: flex; gap: 2px; }
+.items .item { width: 20px; height: 20px; border-radius: 3px; background: var(--bg-inset); }
+@media (max-width: 720px) {
+  .detail-table thead { display: none; }
+  .detail-table td { display: block; border-top: 0; padding: 2px 0; }
+  .detail-table tr { display: block; padding: 9px 0; border-top: 1px solid var(--line-soft); }
+  .detail-table .num { text-align: left; }
+}
+
+/* mercado */
+.market {
+  margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+  background: var(--bg-inset); border: 1px solid var(--line);
+}
+.market-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.market-row label { display: grid; gap: 3px; }
+.market-row input {
+  background: var(--bg-card); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 13px; width: 110px;
+}
+.market-row input:focus { outline: 0; border-color: var(--accent); }
+
+.btn-wide { width: auto; padding: 0 12px; font-size: 12.5px; font-weight: 600; }
+
 .skeleton-list { padding: 14px; display: grid; gap: 9px; }
 .skeleton { height: 42px; border-radius: 7px; background: linear-gradient(90deg, var(--bg-card), var(--bg-inset), var(--bg-card)); background-size: 200% 100%; animation: sh 1.3s infinite; }
 @keyframes sh { to { background-position: -200% 0; } }

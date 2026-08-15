@@ -9,7 +9,13 @@
 import {
   LEAGUES, getSchedule, getLive, getEventDetails, getStandings, getCurrentTournament,
   getWindow, getDetails, feedTimestamp, initDDragon, championIcon, championName, secure,
+  getRosterIndex, itemIcon,
 } from './api.js';
+import {
+  CHECKPOINTS, stateAtMinute, mergePlayers, roleGoldDiff, goldConcentration, detailSignals,
+} from './engine/checkpoints.js';
+import * as ledger from './engine/ledger.js';
+import { diffChampions } from './engine/patchdiff.js';
 import { scoreDraft, isClassified } from './engine/index-score.js';
 import {
   structuralAxes, laneMatchups, concentrationAndWindow, NON_COMPUTABLE_AXES,
@@ -17,7 +23,9 @@ import {
 } from './engine/structural.js';
 import { readState, liveSignals, gameMinute, snapshotLabel } from './engine/live.js';
 import { buildProbability, bettingStance, layerDisagreement } from './engine/probability.js';
-import { buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache } from './engine/meta.js';
+import {
+  buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache, rosterCheck,
+} from './engine/meta.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) =>
@@ -38,6 +46,9 @@ const state = {
   standings: null,
   metaIndex: null,
   metaBuilding: false,
+  rosters: null,
+  patchDiff: null,
+  patchDiffBusy: false,
   timer: null,
 };
 
@@ -50,6 +61,11 @@ async function init() {
   $('#refresh').addEventListener('click', () => {
     if (state.matchId) openMatch(state.matchId, { force: true });
     else loadLeague(state.league);
+  });
+  $('#open-ledger').addEventListener('click', () => {
+    state.matchId = null;
+    renderMatchList();
+    renderLedger();
   });
   await initDDragon();
   await loadLeague(state.league);
@@ -281,17 +297,49 @@ async function renderMatch(ev, force) {
   let liveFrame = null, startTs = null, detailsFrame = null;
   startTs = win.frames?.[0]?.rfc460Timestamp ?? null;
   if (game?.state === 'inProgress' || game?.state === 'completed') {
-    const ts = feedTimestamp(game.state === 'inProgress' ? 90 : 0);
+    const ts = game.state === 'inProgress' ? feedTimestamp(90) : lateTimestamp(startTs);
     try {
-      const w2 = await getWindow(state.gameId, game.state === 'inProgress' ? ts : lateTimestamp(startTs));
+      const [w2, d2] = await Promise.all([
+        getWindow(state.gameId, ts),
+        getDetails(state.gameId, ts).catch(() => null),
+      ]);
       liveFrame = w2?.frames?.slice(-1)[0] ?? null;
-      const d2 = await getDetails(state.gameId, game.state === 'inProgress' ? ts : lateTimestamp(startTs));
       detailsFrame = d2?.frames?.slice(-1)[0] ?? null;
     } catch { /* el análisis de draft sigue funcionando sin estado */ }
   }
 
   const minute = liveFrame ? gameMinute(startTs, liveFrame.rfc460Timestamp) : null;
   const st = liveFrame ? readState(liveFrame, sides, minute) : null;
+
+  // Vista por jugador uniendo window (oro, nivel, KDA, CS) con details
+  // (damage share, participación en kills, wards, ítems).
+  const merged = liveFrame ? mergePlayers(liveFrame, detailsFrame, sides) : null;
+  const roleGold = merged ? roleGoldDiff(merged, sides) : null;
+  const goldConc = roleGold ? goldConcentration(roleGold) : null;
+  const dSignals = merged ? detailSignals(merged, sides, minute ?? 0) : [];
+
+  // Checkpoints exactos del minuto 15 y 20, pedidos al minuto y no "cuando toqué".
+  const checkpoints = [];
+  if (startTs && minute) {
+    for (const cp of CHECKPOINTS) {
+      if (minute < cp) continue;
+      const snap = await stateAtMinute(state.gameId, startTs, cp);
+      if (!snap) continue;
+      const cpMerged = mergePlayers(snap.frame, snap.detailsFrame, sides);
+      const cpState = readState(snap.frame, sides, cp);
+      checkpoints.push({
+        minute: cp,
+        state: cpState,
+        roleGold: roleGoldDiff(cpMerged, sides),
+        goldDiff: cpState ? cpState.a.gold - cpState.b.gold : null,
+      });
+    }
+  }
+
+  // Roster: separar suplente de pick raro.
+  if (!state.rosters) state.rosters = await getRosterIndex().catch(() => ({}));
+  const rosterA = rosterCheck(state.rosters, blue);
+  const rosterB = rosterCheck(state.rosters, red);
 
   // --- análisis ---
   const score = scoreDraft(
@@ -325,23 +373,50 @@ async function renderMatch(ev, force) {
     { name: 'Capa de campeón', favors: championLayerFavors(chLayerA, chLayerB, blue, red) },
   ]);
 
+  // Congelar la predicción la primera vez que se ve este mapa. Idempotente:
+  // reabrirlo no la reescribe aunque el modelo ahora diga otra cosa.
+  const entry = ledger.recordPrediction(state.gameId, {
+    matchId: state.matchId,
+    league: ev.league?.name,
+    tournament: state.tournament?.slug,
+    teamA: blue.team, teamB: red.team, sideA: 'blue',
+    gameNumber: game?.number,
+    gameState: game?.state,
+    startedBefore: !!minute && minute > 2,
+    p: prob.p, tfDelta: score.tfDelta, band: score.tfBand.label,
+    hadQuality: prob.hasQuality,
+    layers: disagreement.layers.map((l) => `${l.name}: ${l.favors}`),
+  });
+  for (const cp of checkpoints) {
+    ledger.recordSnapshot(state.gameId, cp.minute, {
+      goldDiff: cp.goldDiff,
+      kills: cp.state ? `${cp.state.a.kills}-${cp.state.b.kills}` : null,
+      towers: cp.state ? `${cp.state.a.towers}-${cp.state.b.towers}` : null,
+    });
+  }
+
   $('#content').innerHTML = [
     matchHeader(ev, game, games),
     st ? cardLiveState(st, minute, game) : '',
-    cardDraft(blue, red, lanes),
+    checkpoints.length ? cardCheckpoints(checkpoints, blue, red) : '',
+    cardDraft(blue, red, lanes, rosterA, rosterB),
     cardIndex(score),
     cardConcentration(edges, axes, blue, red),
+    roleGold ? cardRoleGold(roleGold, goldConc, edges, blue, red, minute) : '',
+    merged ? cardPlayerDetail(merged, blue, red) : '',
     cardChampionLayer(chLayerA, chLayerB, blue, red),
-    cardPlayerLayer(plLayerA, plLayerB, blue, red, chLayerA, chLayerB),
+    cardPlayerLayer(plLayerA, plLayerB, blue, red, chLayerA, chLayerB, rosterA, rosterB),
     cardPatch(meta.patchVersion, blue, red),
     cardWindow(win7),
-    cardReading(score, prob, stance, blue, red, disagreement),
-    st ? cardSignals(st, minute) : cardSignalsPreview(),
+    cardReading(score, prob, stance, blue, red, disagreement, entry),
+    st ? cardSignals(st, minute, dSignals) : cardSignalsPreview(),
     cardMatchupChecklist(),
   ].join('');
 
   bindGameTabs();
   bindMetaButton();
+  bindPatchDiff(blue, red, meta.patchVersion);
+  bindMarketAndResult(blue, red);
 }
 
 /** Para un mapa terminado pedimos un frame bien tardío para agarrar el estado final. */
@@ -422,26 +497,38 @@ function matchHeader(ev, game, games) {
   </div>`;
 }
 
-function championCell(p) {
+function championCell(p, subLabel) {
   const icon = championIcon(p.champion);
   const unk = isClassified(p.champion) ? '' : `<div class="unclassified">sin clasificar en la tabla</div>`;
   return `<div class="champ">
       ${icon ? `<img src="${esc(icon)}" alt="" loading="lazy">` : '<div class="champ-img-ph"></div>'}
       <div class="champ-txt">
         <div class="champ-name">${esc(championName(p.champion))}</div>
-        <div class="champ-player">${esc(p.name)}</div>
+        <div class="champ-player">${esc(p.name)}${subLabel ? ` <span class="badge badge-warn">${esc(subLabel)}</span>` : ''}</div>
         ${unk}
       </div>
     </div>`;
 }
 
-function cardDraft(blue, red, lanes) {
+function cardDraft(blue, red, lanes, rosterA, rosterB) {
+  const subOf = (roster, player) => {
+    if (!roster?.known) return null;
+    const row = roster.rows.find((r) => r.participantId === player.participantId);
+    if (!row) return null;
+    if (!row.starter) return 'suplente';
+    if (row.offRole) return `titular de ${ROLE_LABEL[row.offRole] ?? row.offRole}`;
+    return null;
+  };
   const rows = lanes.map((l) => `
     <tr>
-      <td>${l.a ? championCell(l.a) : '<span class="muted-xs">—</span>'}</td>
+      <td>${l.a ? championCell(l.a, subOf(rosterA, l.a)) : '<span class="muted-xs">—</span>'}</td>
       <td class="role" style="text-align:center">${esc(l.label)}</td>
-      <td>${l.b ? championCell(l.b) : '<span class="muted-xs">—</span>'}</td>
+      <td>${l.b ? championCell(l.b, subOf(rosterB, l.b)) : '<span class="muted-xs">—</span>'}</td>
     </tr>`).join('');
+  const subsNote = [
+    ...(rosterA?.subs ?? []).map((s) => `${s.name} (${blue.team})`),
+    ...(rosterB?.subs ?? []).map((s) => `${s.name} (${red.team})`),
+  ];
 
   return `
   <div class="card">
@@ -456,6 +543,129 @@ function cardDraft(blue, red, lanes) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      ${subsNote.length ? `<div class="note note-warn">Fuera del roster listado: ${esc(subsNote.join(' · '))}.
+        Un suplente y un pick raro se ven igual en la capa de jugador y no son lo mismo.
+        El roster que devuelve la API es el vigente, no el del día del partido.</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function cardCheckpoints(checkpoints, blue, red) {
+  const cols = checkpoints.map((cp) => {
+    const dg = cp.goldDiff;
+    const lead = dg == null ? null : dg > 0 ? blue.team : red.team;
+    const read = dg == null ? '—'
+      : Math.abs(dg) < 1000
+        ? `Menos de 1k: empate. El empate favorece a quien tiene mejor tardío.`
+        : `Ventaja de ${esc(lead)}.`;
+    return `
+      <div class="stat">
+        <div class="stat-k">Minuto ${cp.minute} · oro</div>
+        <div class="stat-v">${dg == null ? '—' : (dg >= 0 ? '+' : '') + dg.toLocaleString('es')}</div>
+        <div class="muted-xs">${read}</div>
+        ${cp.state ? `<div class="muted-xs">kills ${cp.state.a.kills}-${cp.state.b.kills} ·
+          torres ${cp.state.a.towers}-${cp.state.b.towers}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  return `
+  <div class="card">
+    <div class="card-head"><h3>Checkpoints</h3>
+      <span class="muted-xs">pedidos al minuto exacto, no cuando se abrió la página</span></div>
+    <div class="card-body">
+      <div class="live-grid">${cols}</div>
+      <div class="note note-ok">Guardado en el registro con fecha. Es lo único que después
+        permite calibrar: el estado anotado antes de saber el resultado.</div>
+    </div>
+  </div>`;
+}
+
+function cardRoleGold(roleGold, conc, edges, blue, red, minute) {
+  const max = Math.max(1, ...roleGold.map((r) => Math.abs(r.diff ?? 0)));
+  const rows = roleGold.map((r) => {
+    const d = r.diff;
+    const pct = d == null ? 0 : (d / max) * 50;
+    const w = Math.abs(pct);
+    const left = pct >= 0 ? 50 : 50 - w;
+    return `
+      <div class="axis-row">
+        <div class="axis-name">${esc(ROLE_LABEL[r.role] ?? r.role)}</div>
+        <div class="axis-bar"><div class="mid"></div>
+          <div class="fill" style="left:${left}%;width:${w}%;background:${pct >= 0 ? 'var(--blue)' : 'var(--red)'}"></div>
+        </div>
+        <div class="axis-val">${d == null ? '—' : (d >= 0 ? '+' : '') + d.toLocaleString('es')}
+          <div class="muted-xs">${esc(r.a?.champion ?? '—')} / ${esc(r.b?.champion ?? '—')}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Contraste entre lo que el draft predijo y dónde se concentró el oro.
+  const predicted = edges[0]?.carrier?.role ?? null;
+  const actual = conc?.top?.[0]?.role ?? null;
+  let verdict = '';
+  if (predicted && actual) {
+    const hit = predicted === actual;
+    verdict = `<div class="note ${hit ? 'note-ok' : 'note-warn'}">
+      El draft decía que el margen se concentraba en <strong>${esc(ROLE_LABEL[predicted] ?? predicted)}</strong>
+      (${esc(edges[0].side)}). El oro se concentró en <strong>${esc(ROLE_LABEL[actual] ?? actual)}</strong>.
+      ${hit ? 'La afirmación del Paso 7 se cumplió en este mapa.'
+            : 'No coincide. Anotalo: los desacuerdos son los únicos casos que enseñan algo.'}
+    </div>`;
+  } else if (!predicted) {
+    verdict = `<div class="note">El draft no nombró una posición de concentración, así que no hay
+      nada que verificar acá.</div>`;
+  }
+
+  return `
+  <div class="card">
+    <div class="card-head"><h3>Oro por rol</h3>
+      <span class="muted-xs">${minute ? `minuto ${minute.toFixed(0)}` : ''} · verifica la concentración predicha</span></div>
+    <div class="card-body">
+      ${rows}
+      ${conc?.share != null ? `<div class="row"><span class="row-label">Concentración</span>
+        <span class="row-val">${(conc.share * 100).toFixed(0)}% del desequilibrio vive en 2 posiciones</span></div>` : ''}
+      ${verdict}
+    </div>
+  </div>`;
+}
+
+function cardPlayerDetail(merged, blue, red) {
+  const pct = (v) => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
+  const itemRow = (items) =>
+    (items ?? []).slice(0, 6).map((id) => {
+      const src = itemIcon(id);
+      return src ? `<img class="item" src="${esc(src)}" alt="" loading="lazy">` : '';
+    }).join('');
+
+  const side = (players, team) => `
+    <div class="muted-xs" style="margin:10px 0 4px">${esc(team)}</div>
+    <table class="detail-table">
+      <thead><tr><th>Jugador</th><th>KDA</th><th>Oro</th><th>Daño</th><th>KP</th><th>Wards</th><th>Ítems</th></tr></thead>
+      <tbody>
+      ${players.map((p) => `
+        <tr>
+          <td><strong>${esc(championName(p.champion))}</strong><div class="champ-player">${esc(p.name)}</div></td>
+          <td class="num">${p.kills}/${p.deaths}/${p.assists}</td>
+          <td class="num">${p.gold == null ? '—' : p.gold.toLocaleString('es')}</td>
+          <td class="num">${pct(p.damageShare)}</td>
+          <td class="num">${pct(p.killParticipation)}</td>
+          <td class="num">${p.wardsPlaced == null ? '—' : `${p.wardsPlaced}/${p.wardsDestroyed ?? 0}`}</td>
+          <td><div class="items">${itemRow(p.items)}</div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  const anyDetails = [...merged.a, ...merged.b].some((p) => p.hasDetails);
+
+  return `
+  <div class="card">
+    <div class="card-head"><h3>Detalle por jugador</h3>
+      <span class="muted-xs">daño, participación en kills, visión e ítems</span></div>
+    <div class="card-body">
+      ${anyDetails ? '' : `<div class="note note-warn">El feed de detalle no devolvió datos para este
+        frame. Las columnas de daño, KP y wards quedan vacías: faltan, no son cero.</div>`}
+      ${side(merged.a, blue.team)}
+      ${side(merged.b, red.team)}
     </div>
   </div>`;
 }
@@ -595,6 +805,14 @@ function cardChampionLayer(la, lb, blue, red) {
         atribuye resultado en series barridas. Ese subconjunto está sesgado hacia series decisivas.
         Los <strong>picks</strong> sí se cuentan sobre todos los mapas.
       </div>
+      ${state.metaIndex.failures?.any ? `<div class="note note-warn">
+        Lectura incompleta: de ${state.metaIndex.gamesTotal ?? '?'} mapas del torneo se leyeron
+        ${state.metaIndex.gamesCounted}.
+        ${state.metaIndex.failures.games ? `${state.metaIndex.failures.games} fallaron al descargar. ` : ''}
+        ${state.metaIndex.failures.emptyDrafts ? `${state.metaIndex.failures.emptyDrafts} volvieron sin draft. ` : ''}
+        ${state.metaIndex.failures.matches ? `${state.metaIndex.failures.matches} series no se pudieron leer. ` : ''}
+        El n de abajo es menor de lo que debería y eso cambia los intervalos.
+      </div>` : ''}
       <div style="margin-top:12px"><div class="muted-xs">${esc(blue.team)}</div>${side(la)}</div>
       <div style="margin-top:14px"><div class="muted-xs">${esc(red.team)}</div>${side(lb)}</div>
       <div style="margin-top:12px"><button class="btn btn-sm btn-outline" id="rebuild-meta">Reindexar</button></div>
@@ -602,7 +820,7 @@ function cardChampionLayer(la, lb, blue, red) {
   </div>`;
 }
 
-function cardPlayerLayer(pa, pb, blue, red, ca, cb) {
+function cardPlayerLayer(pa, pb, blue, red, ca, cb, rosterA, rosterB) {
   if (!pa) {
     return `<div class="card">
       <div class="card-head"><h3>Capa de jugador</h3></div>
@@ -611,13 +829,18 @@ function cardPlayerLayer(pa, pb, blue, red, ca, cb) {
   }
   const risks = [...stackedRisk(ca, pa), ...stackedRisk(cb, pb)];
 
-  const side = (l) => l.map((p) => `
+  const isSub = (roster, p) =>
+    roster?.known && roster.rows.find((r) => r.participantId === p.participantId)?.starter === false;
+
+  const side = (l, roster) => l.map((p) => `
     <div class="layer-row">
       <div>
         <div><strong>${esc(p.name)}</strong> <span class="muted-xs">${esc(championName(p.champion))}</span>
           <span class="badge ${p.admits ? 'badge-ok' : p.status === 'observacion' ? 'badge-blue' : 'badge-no'}">
-            ${p.admits ? 'entra' : p.status === 'observacion' ? 'observación' : 'sin datos'}</span></div>
-        <div class="layer-reason">${esc(p.reason)}</div>
+            ${p.admits ? 'entra' : p.status === 'observacion' ? 'observación' : 'sin datos'}</span>
+          ${isSub(roster, p) ? '<span class="badge badge-warn">suplente</span>' : ''}</div>
+        <div class="layer-reason">${esc(p.reason)}${isSub(roster, p)
+          ? ' Está fuera del roster listado: sus pocas partidas se explican por eso, no por un pick raro.' : ''}</div>
       </div>
       <div class="row-val">${p.champGames}/${p.seasonGames}</div>
     </div>`).join('');
@@ -627,8 +850,8 @@ function cardPlayerLayer(pa, pb, blue, red, ca, cb) {
     <div class="card-head"><h3>Capa de jugador</h3>
       <span class="muted-xs">partidas con el campeón / totales en el torneo</span></div>
     <div class="card-body">
-      <div style="margin-top:2px"><div class="muted-xs">${esc(blue.team)}</div>${side(pa)}</div>
-      <div style="margin-top:14px"><div class="muted-xs">${esc(red.team)}</div>${side(pb)}</div>
+      <div style="margin-top:2px"><div class="muted-xs">${esc(blue.team)}</div>${side(pa, rosterA)}</div>
+      <div style="margin-top:14px"><div class="muted-xs">${esc(red.team)}</div>${side(pb, rosterB)}</div>
       ${risks.map((r) => `<div class="note note-warn">${esc(r)}</div>`).join('')}
       <div class="note">
         El <strong>conteo de partidas</strong> es observación, no regla: acertó 5 veces seguidas y
@@ -641,18 +864,61 @@ function cardPlayerLayer(pa, pb, blue, red, ca, cb) {
 
 function cardPatch(patch, blue, red) {
   const short = patch ? patch.split('.').slice(0, 2).join('.') : null;
+  const d = state.patchDiff;
+
+  let body;
+  if (!d) {
+    body = `
+      <div style="margin-top:12px"><button class="btn" id="patch-diff">Comparar con el parche anterior</button></div>
+      <div id="patch-progress"></div>
+      <div class="note">Compara los datos de Data Dragon de los diez campeones entre esta versión y
+        la anterior. Es un hecho verificable, no un changelog interpretado.</div>`;
+  } else if (!d.versions) {
+    body = `<div class="note note-warn">No se pudieron resolver dos versiones de Data Dragon para
+      comparar contra ${esc(short ?? 'este parche')}.</div>`;
+  } else {
+    const changed = d.rows.filter((r) => r.changes.length);
+    const unchanged = d.rows.filter((r) => !r.changes.length && !r.missing);
+    body = `
+      <div class="row"><span class="row-label">Comparación</span>
+        <span class="row-val">${esc(d.versions.previous)} → ${esc(d.versions.current)}</span></div>
+      ${!d.versions.matchedFeedPatch ? `<div class="note note-warn">Data Dragon no tiene una versión
+        que coincida con ${esc(short)}; se usó la más reciente disponible. La comparación puede no
+        ser la del parche que se está jugando.</div>` : ''}
+
+      ${changed.length ? changed.map((r) => `
+        <div class="edge-item">
+          <div class="edge-title">${esc(championName(r.id))}
+            <span class="badge badge-warn">${r.changes.length} cambio${r.changes.length === 1 ? '' : 's'}</span></div>
+          ${r.changes.slice(0, 8).map((c) => `<div class="muted-xs">${esc(c.field)}: ${esc(c.from)} → ${esc(c.to)}</div>`).join('')}
+          ${r.changes.length > 8 ? `<div class="muted-xs">…y ${r.changes.length - 8} más</div>` : ''}
+        </div>`).join('')
+        : `<p class="muted" style="margin-top:10px">Ninguno de los diez campeones cambió en los
+             campos que Data Dragon expone.</p>`}
+
+      ${unchanged.length ? `<div class="muted-xs" style="margin-top:10px">Sin cambios visibles:
+        ${esc(unchanged.map((r) => championName(r.id)).join(', '))}</div>` : ''}
+      ${d.unresolved.length ? `<div class="note note-warn">Sin resolver en Data Dragon:
+        ${esc(d.unresolved.join(', '))}.</div>` : ''}
+      ${d.failures ? `<div class="note note-warn">${d.failures} campeón(es) fallaron al descargar.
+        La comparación está incompleta.</div>` : ''}
+
+      <div class="note">
+        <strong>Cobertura parcial, y hay que leerlo así.</strong> Data Dragon expone stats base,
+        crecimiento por nivel y valores numéricos de habilidades. No expone cambios de
+        comportamiento, interacción ni hitbox. Entonces "cambió" es un hecho, pero "no cambió"
+        solo significa que no cambió nada de lo que Data Dragon muestra.
+        Un rework reciente es incertidumbre, no ventaja ni desventaja.
+      </div>`;
+  }
+
   return `
   <div class="card">
     <div class="card-head"><h3>Parche</h3><span class="muted-xs">del feed, nunca de gol.gg</span></div>
     <div class="card-body">
       <div class="row"><span class="row-label">Versión del feed</span>
         <span class="row-val">${esc(patch ?? 'no disponible')}${short ? ` · lo que importa es <strong>${esc(short)}</strong>` : ''}</span></div>
-      <div class="note">
-        El sitio no mantiene una lista de cambios de balance, así que <strong>no afirma</strong> que
-        algún campeón del draft haya sido tocado en ${esc(short ?? 'este parche')}. Verificalo en las
-        notas oficiales antes de construir una lectura de balance: un rework reciente es
-        incertidumbre, no ventaja ni desventaja.
-      </div>
+      ${body}
     </div>
   </div>`;
 }
@@ -686,7 +952,42 @@ function cardWindow(w) {
   </div>`;
 }
 
-function cardReading(score, prob, stance, blue, red, dis) {
+function marketBlock(blue, red, entry) {
+  const obs = entry?.market ?? [];
+  const open = obs[0]?.p ?? null;
+  const close = obs.length > 1 ? obs[obs.length - 1].p : null;
+  const move = open != null && close != null ? close - open : null;
+
+  return `
+  <div class="market">
+    <div class="muted-xs" style="margin-bottom:6px"><strong>Precio de mercado</strong> — la métrica
+      oficial es CLV, no aciertos. Sin precio, la postura no se puede evaluar.</div>
+    <div class="market-row">
+      <label class="muted-xs">Cuota decimal de ${esc(blue.team)}
+        <input type="number" step="0.01" min="1.01" id="odds-a" placeholder="1.85">
+      </label>
+      <label class="muted-xs">o probabilidad %
+        <input type="number" step="1" min="1" max="99" id="pct-a" placeholder="54">
+      </label>
+      <button class="btn btn-sm" id="save-market">Registrar precio</button>
+    </div>
+    ${obs.length ? `
+      <div class="row"><span class="row-label">Observaciones</span>
+        <span class="row-val">${obs.length} · apertura ${(open * 100).toFixed(1)}%
+          ${close != null ? ` · última ${(close * 100).toFixed(1)}%` : ''}</span></div>
+      ${move != null ? `<div class="muted-xs">Movimiento del precio: ${move >= 0 ? '+' : ''}${(move * 100).toFixed(1)} puntos
+        hacia ${move >= 0 ? esc(blue.team) : esc(red.team)}.</div>` : ''}
+    ` : '<div class="muted-xs">Todavía sin precio registrado para este mapa.</div>'}
+    <div class="market-row" style="margin-top:10px">
+      <span class="muted-xs">Resultado del mapa:</span>
+      <button class="btn btn-sm btn-outline" data-result="A">Ganó ${esc(blue.team)}</button>
+      <button class="btn btn-sm btn-outline" data-result="B">Ganó ${esc(red.team)}</button>
+      ${entry?.result ? `<span class="badge badge-ok">registrado: ${entry.result === 'A' ? esc(blue.team) : esc(red.team)}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function cardReading(score, prob, stance, blue, red, dis, entry) {
   const pa = prob.p, pb = 1 - pa;
   const comps = prob.components.map((c) => `
     <div class="comp-row">
@@ -727,15 +1028,23 @@ function cardReading(score, prob, stance, blue, red, dis) {
         </div>
       </div>
 
+      ${marketBlock(blue, red, entry)}
+
       <div class="stance">
         <div class="stance-tag">${esc(stance.stance)}</div>
         <div class="muted-xs" style="margin-top:5px">${esc(stance.reason)}</div>
       </div>
 
-      <div class="note" style="margin-top:12px">
-        Registrá este número antes del resultado: la calibración solo se construye con
-        predicciones escritas antes. Y distinguí predicción <em>correcta</em> de predicción
-        <em>informativa</em> — elegir al 8-2 contra el 0-8 es correcto y no informa nada.
+      <div class="note ${entry?.prediction?.preGame ? 'note-ok' : 'note-warn'}" style="margin-top:12px">
+        ${entry?.prediction
+          ? `Predicción congelada el ${esc(new Date(entry.createdAt).toLocaleString('es'))} en
+             <strong>${(entry.prediction.p * 100).toFixed(0)}%</strong>.
+             ${entry.prediction.preGame
+               ? 'Se registró antes de que el mapa avanzara, así que cuenta como predicción previa.'
+               : 'El mapa ya estaba en curso al registrarla: NO cuenta como predicción previa limpia y se marca aparte en el registro.'}`
+          : 'Sin registrar.'}
+        Distinguí predicción <em>correcta</em> de predicción <em>informativa</em>: elegir al 8-2
+        contra el 0-8 es correcto y no informa nada.
       </div>
     </div>
   </div>`;
@@ -765,8 +1074,8 @@ function cardLiveState(st, minute, game) {
   </div>`;
 }
 
-function cardSignals(st, minute) {
-  const sig = liveSignals(st);
+function cardSignals(st, minute, extra = []) {
+  const sig = [...liveSignals(st), ...extra];
   return `
   <div class="card">
     <div class="card-head"><h3>Señales a verificar</h3>
@@ -831,6 +1140,148 @@ function bindMetaButton() {
     state.metaIndex = null;
     runMetaIndex(rebuild);
   });
+}
+
+function bindPatchDiff(blue, red, patchVersion) {
+  const btn = document.getElementById('patch-diff');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (state.patchDiffBusy) return;
+    state.patchDiffBusy = true;
+    btn.disabled = true;
+    btn.textContent = 'Comparando…';
+    const box = document.getElementById('patch-progress');
+    const champs = [...blue.players, ...red.players].map((p) => p.champion);
+    try {
+      state.patchDiff = await diffChampions(champs, patchVersion, (done, total) => {
+        if (box) {
+          box.innerHTML = `<div class="muted-xs" style="margin-top:8px">Descargando ${done}/${total}</div>
+            <div class="progress"><i style="width:${(done / total) * 100}%"></i></div>`;
+        }
+      });
+      await openMatch(state.matchId, { force: true });
+    } catch (e) {
+      if (box) box.innerHTML = `<div class="err" style="margin-top:10px">No se pudo comparar: ${esc(e.message)}</div>`;
+    } finally {
+      state.patchDiffBusy = false;
+      if (btn.isConnected) { btn.disabled = false; btn.textContent = 'Comparar con el parche anterior'; }
+    }
+  });
+}
+
+function bindMarketAndResult(blue, red) {
+  const save = document.getElementById('save-market');
+  if (save) {
+    save.addEventListener('click', () => {
+      const odds = parseFloat(document.getElementById('odds-a')?.value);
+      const pct = parseFloat(document.getElementById('pct-a')?.value);
+      let p = null;
+      if (Number.isFinite(odds) && odds > 1) p = 1 / odds;
+      else if (Number.isFinite(pct) && pct > 0 && pct < 100) p = pct / 100;
+      if (p == null) {
+        alert('Cargá una cuota decimal mayor a 1 o un porcentaje entre 1 y 99.');
+        return;
+      }
+      ledger.recordMarket(state.gameId, p);
+      openMatch(state.matchId, { force: true });
+    });
+  }
+  document.querySelectorAll('[data-result]').forEach((b) =>
+    b.addEventListener('click', () => {
+      ledger.recordResult(state.gameId, b.dataset.result);
+      openMatch(state.matchId, { force: true });
+    })
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * registro
+ * ------------------------------------------------------------------ */
+
+function renderLedger() {
+  const s = ledger.summary();
+  const pct = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+
+  const metric = (label, value, note) => `
+    <div class="stat"><div class="stat-k">${esc(label)}</div>
+      <div class="stat-v">${value}</div>
+      ${note ? `<div class="muted-xs">${esc(note)}</div>` : ''}</div>`;
+
+  const rows = s.entries.slice(0, 60).map((e) => `
+    <div class="layer-row">
+      <div>
+        <div><strong>${esc(e.teamA)} vs ${esc(e.teamB)}</strong>
+          <span class="muted-xs">${esc(e.league ?? '')} · mapa ${e.gameNumber ?? '?'}</span>
+          ${e.prediction?.preGame ? '<span class="badge badge-ok">previa</span>' : '<span class="badge badge-warn">en curso</span>'}
+          ${e.result ? `<span class="badge badge-blue">ganó ${e.result === 'A' ? esc(e.teamA) : esc(e.teamB)}</span>` : ''}
+        </div>
+        <div class="layer-reason">
+          ${esc(new Date(e.createdAt).toLocaleString('es'))} ·
+          modelo ${(e.prediction.p * 100).toFixed(0)}% ·
+          Δ ${e.prediction.tfDelta != null ? e.prediction.tfDelta.toFixed(2) + ' sd' : '—'}
+          ${Object.keys(e.snapshots ?? {}).length ? ` · snapshots: ${Object.keys(e.snapshots).join(', ')} min` : ''}
+          ${e.market?.length ? ` · mercado ${(e.market[0].p * 100).toFixed(0)}%→${(e.market[e.market.length - 1].p * 100).toFixed(0)}%` : ''}
+        </div>
+      </div>
+      <button class="btn btn-sm btn-outline" data-del="${esc(e.gameId)}">borrar</button>
+    </div>`).join('');
+
+  $('#content').innerHTML = `
+  <div class="card">
+    <div class="card-head"><h3>Registro de predicciones</h3>
+      <span class="muted-xs">la calibración solo se construye con predicciones escritas antes</span></div>
+    <div class="card-body">
+      <div class="live-grid">
+        ${metric('Registradas', s.total, `${s.resolved} con resultado`)}
+        ${metric('Brier (todas)', s.brierAll ? s.brierAll.brier.toFixed(4) : '—',
+          s.brierAll ? `n=${s.brierAll.n} · 0.25 = predecir 50% siempre` : 'hace falta cargar resultados')}
+        ${metric('Brier (solo previas)', s.brierPreGame ? s.brierPreGame.brier.toFixed(4) : '—',
+          s.brierPreGame ? `n=${s.brierPreGame.n}` : 'sin predicciones previas resueltas')}
+        ${metric('Aciertos', s.hits ? `${s.hits.hits}/${s.hits.n}` : '—',
+          s.hits ? `${pct(s.hits.rate)} — correcto no es informativo` : '')}
+        ${metric('Anticipó el movimiento', s.clv ? `${s.clv.anticipated}/${s.clv.n}` : '—',
+          s.clv ? `${pct(s.clv.rate)} · proxy de CLV` : 'hace falta apertura y cierre de precio')}
+      </div>
+
+      <div class="note">
+        La referencia del backtest es <strong>Brier 0.2368 propio contra 0.2353 del mercado</strong>,
+        con λ*=0. Si tu Brier no baja de eso de forma sostenida, el número propio no está aportando
+        sobre el precio y la postura NO BET sigue siendo la correcta.
+      </div>
+
+      <div style="margin:14px 0; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-sm" id="exp-json">Exportar JSON</button>
+        <button class="btn btn-sm" id="exp-csv">Exportar CSV</button>
+        <button class="btn btn-sm btn-outline" id="ledger-clear">Vaciar registro</button>
+      </div>
+
+      ${rows || '<p class="muted">Todavía no hay predicciones registradas. Se guardan solas al abrir un mapa.</p>'}
+    </div>
+  </div>`;
+
+  document.getElementById('exp-json')?.addEventListener('click', () =>
+    download('checkmatch-registro.json', ledger.exportJSON(), 'application/json'));
+  document.getElementById('exp-csv')?.addEventListener('click', () =>
+    download('checkmatch-registro.csv', ledger.exportCSV(), 'text/csv'));
+  document.getElementById('ledger-clear')?.addEventListener('click', () => {
+    if (confirm('¿Vaciar todo el registro? Se pierden las predicciones guardadas.')) {
+      ledger.clearLedger();
+      renderLedger();
+    }
+  });
+  document.querySelectorAll('[data-del]').forEach((b) =>
+    b.addEventListener('click', () => { ledger.deleteEntry(b.dataset.del); renderLedger(); })
+  );
+}
+
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function runMetaIndex(btn) {

@@ -4,9 +4,9 @@
 # necesita Node ni Python: usa HttpListener de .NET, que ya viene con Windows.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\serve.ps1
-#   luego abrir http://localhost:8099/
+#   luego abrir http://localhost:8100/
 
-param([int]$Port = 8099)
+param([int]$Port = 8100)
 
 $root = Split-Path -Parent $PSScriptRoot
 $prefix = "http://localhost:$Port/"

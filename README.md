@@ -14,15 +14,20 @@ a lo más interpretativo:
 
 | Sección | Qué contiene |
 |---|---|
-| Draft | Los diez campeones por posición, mapeados por `esportsTeamId` |
+| Checkpoints | Estado del minuto 15 y 20, pedidos al minuto exacto |
+| Draft | Los diez campeones por posición, mapeados por `esportsTeamId`, con suplentes marcados |
 | Índice | Δ de teamfight en desviaciones estándar, banda y arquetipo primario |
 | Concentración | Las una o dos posiciones donde se concentra el margen estructural |
+| Oro por rol | Dónde se concentró el oro de verdad, contrastado contra lo que predijo el draft |
+| Detalle por jugador | Daño, participación en kills, visión e ítems |
 | Capa de campeón | Winrate por torneo, solo con 10+ picks |
 | Capa de jugador | Partidas por jugador con el campeón que juega hoy |
-| Parche | Versión del feed |
+| Parche | Versión del feed y diff real contra el parche anterior |
 | Ventana | Punto de quiebre como rango de minutos, con afirmaciones verificables |
-| Lectura | Probabilidad por componentes y postura de apuesta |
-| Señales | 3-6 cosas falsables para mirar entre el minuto 14 y el 20 |
+| Lectura | Probabilidad por componentes, precio de mercado y postura de apuesta |
+| Señales | Señales falsables para mirar entre el minuto 14 y el 20 |
+
+Y un **Registro** que guarda cada predicción con fecha y calcula Brier, aciertos y un proxy de CLV.
 
 ## Cómo está construido
 
@@ -37,10 +42,24 @@ assets/js/
   data/tables.js          tablas CONGELADAS (146 campeones, 62 comps de referencia)
   engine/index-score.js   port de score_draft.py
   engine/structural.js    ejes de counter, matchups, concentración y ventana
-  engine/meta.js          índice de torneo: capas de campeón y jugador
+  engine/meta.js          índice de torneo: capas de campeón y jugador, rosters
+  engine/checkpoints.js   estado en minutos exactos, oro por rol, señales de detalle
   engine/live.js          señales de verificación en vivo
   engine/probability.js   probabilidad por componentes y postura
+  engine/ledger.js        registro de predicciones, Brier y CLV
+  engine/patchdiff.js     diff de campeones entre dos versiones de Data Dragon
 ```
+
+### El circuito que cierra el Paso 7
+
+El sitio afirma antes de la partida dónde se concentra el margen, y después lo verifica: la
+tarjeta de **oro por rol** compara la posición predicha contra la posición donde el oro se
+concentró de verdad, y dice si coincidió. Cuando no coincide lo marca, porque son los únicos
+casos que enseñan algo.
+
+Los **checkpoints** no son "el estado cuando abriste la página": el feed responde
+`window/{id}?startingTime=T` con unos 45 frames que abarcan ~10 segundos alrededor de `T`, así que
+el minuto 15 se pide pidiendo el minuto 15. Quedan guardados con fecha en el registro.
 
 ### Fuentes de datos
 
@@ -95,12 +114,27 @@ decisivas y el sitio lo dice en cada informe en vez de presentarlo como winrate 
 mercado gana. Las value bets acertaron 33% con ROI −28.2%, o sea que el edge medido fue negativo.
 Esto sirve para entender partidos, no para justificar una entrada.
 
+### Registro y calibración
+
+Cada mapa que abrís congela su predicción con fecha, y no se reescribe si volvés a abrirlo. Si el
+mapa ya estaba en curso al registrarla, se marca como **no previa** y se cuenta aparte: una
+predicción hecha con la partida avanzada no es comparable con una previa. El registro calcula
+Brier, aciertos y un proxy de CLV, y exporta a JSON o CSV.
+
+La referencia es Brier **0.2368 propio contra 0.2353 del mercado**. Si el tuyo no baja de eso de
+forma sostenida, el número propio no aporta sobre el precio.
+
 ## Limitaciones conocidas
 
-- El sitio **no mantiene una lista de cambios de balance**, así que reporta la versión del parche
-  pero no afirma qué campeones fueron tocados.
+- El **diff de parche tiene cobertura parcial**. Data Dragon expone stats y valores de habilidades,
+  no cambios de comportamiento ni de interacción. "Cambió" es un hecho; "no cambió" solo significa
+  que no cambió nada de lo que Data Dragon muestra.
+- El **roster para detectar suplentes es el vigente**, no el del día del partido: en partidos viejos
+  puede marcar como suplente a quien entonces era titular.
 - La probabilidad usa pesos explícitos **no validados fuera de muestra**. Están declarados como
-  constantes en `engine/probability.js` para que se puedan criticar.
+  constantes en `engine/probability.js` para que se puedan criticar. El aporte del estado de
+  partida está acotado a ±2.5 en log-odds y el total a [4%, 96%].
+- El **resultado por mapa se carga a mano**, porque la API no lo expone.
 - El índice de torneo depende de que la liga tenga partidos terminados en el split vigente.
 - Los ejes estructurales se derivan de una tabla de juicio, no de datos medidos.
 
@@ -114,7 +148,7 @@ componentes de Windows:
 powershell -ExecutionPolicy Bypass -File tools\serve.ps1
 ```
 
-Después abrí http://localhost:8099/.
+Después abrí http://localhost:8100/.
 
 ## Licencia y créditos
 

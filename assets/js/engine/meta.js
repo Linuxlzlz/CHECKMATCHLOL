@@ -72,7 +72,7 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
   // 2. Detalles de cada partido: mapas y marcador de serie.
   onProgress({ phase: 'matches', done: 0, total: matches.length, label: 'Leyendo series…' });
   let done = 0;
-  const details = await pool(matches, 6, async (e) => {
+  const { results: details, failures: matchFailures } = await pool(matches, 6, async (e) => {
     if (signal?.aborted) throw new DOMException('cancelado', 'AbortError');
     const d = await getEventDetails(e.match.id);
     onProgress({ phase: 'matches', done: ++done, total: matches.length, label: 'Leyendo series…' });
@@ -98,7 +98,7 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
   // 4. Draft de cada mapa desde el feed.
   onProgress({ phase: 'games', done: 0, total: games.length, label: 'Leyendo drafts…' });
   let gdone = 0;
-  const drafts = await pool(games, 8, async (g) => {
+  const { results: drafts, failures: gameFailures } = await pool(games, 8, async (g) => {
     if (signal?.aborted) throw new DOMException('cancelado', 'AbortError');
     const w = await getWindow(g.gameId);
     onProgress({ phase: 'games', done: ++gdone, total: games.length, label: 'Leyendo drafts…' });
@@ -160,13 +160,24 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
     }
   }
 
+  // Los mapas que no se pudieron leer se cuentan y se muestran. Un torneo con
+  // 7 mapas caídos no puede reportarse como si tuviera 7 mapas menos y ya.
+  const emptyDrafts = drafts.filter((d) => !d?.players?.length).length;
+
   const index = {
     tournamentId: tid,
     tournamentSlug: tournament?.slug ?? null,
     builtAt: Date.now(),
     gamesCounted,
     gamesAttributable,
+    gamesTotal: games.length,
     matchesRead: matches.length,
+    failures: {
+      matches: matchFailures.length,
+      games: gameFailures.length,
+      emptyDrafts,
+      any: matchFailures.length + gameFailures.length + emptyDrafts > 0,
+    },
     champions: Object.fromEntries(champions),
     players: Object.fromEntries(
       [...players.entries()].map(([k, v]) => [
@@ -187,11 +198,44 @@ function emptyIndex(tid, tournament, reason) {
     builtAt: Date.now(),
     gamesCounted: 0,
     gamesAttributable: 0,
+    gamesTotal: 0,
     matchesRead: 0,
+    failures: { matches: 0, games: 0, emptyDrafts: 0, any: false },
     champions: {},
     players: {},
     reason,
   };
+}
+
+/**
+ * Compara los cinco que juegan contra el roster listado del equipo.
+ *
+ * Un suplente y un pick raro se ven igual en la capa de jugador ("0 partidas")
+ * y son cosas muy distintas para leer un mapa. Esto los separa.
+ *
+ * Salvedad: getTeams devuelve el roster VIGENTE, no el del día del partido, así
+ * que en partidos viejos puede marcar como suplente a quien entonces era titular.
+ */
+export function rosterCheck(rosterIndex, side) {
+  const team = rosterIndex?.[side.teamId] ?? null;
+  if (!team || !team.players?.length) {
+    return { known: false, rows: side.players.map((p) => ({ ...p, starter: null })) };
+  }
+  const byId = new Set(team.players.map((p) => p.id));
+  const byName = new Set(team.players.map((p) => (p.name ?? '').toLowerCase()));
+  const rows = side.players.map((p) => {
+    // El feed antepone el tag del equipo: "TLAW Morgan" -> "morgan".
+    const bare = (p.name ?? '').replace(/^\S+\s+/, '').toLowerCase();
+    const starter = byId.has(p.playerId) || byName.has(bare) || byName.has((p.name ?? '').toLowerCase());
+    const listed = team.players.find((r) => r.id === p.playerId);
+    return {
+      ...p,
+      starter,
+      // Un titular jugando fuera de su rol también es información.
+      offRole: !!listed && listed.role !== p.role ? listed.role : null,
+    };
+  });
+  return { known: true, rows, subs: rows.filter((r) => !r.starter) };
 }
 
 function readCache(tid) {

@@ -75,6 +75,39 @@ export const getStandings = (tournamentId) =>
 
 export const getTeams = (slug) => gw(`getTeams?hl=es-ES&id=${slug}`, 3_600_000);
 
+/**
+ * Roster de todos los equipos, indexado por id. Sin `id` el endpoint devuelve
+ * ~1500 equipos con sus jugadores, que es la única vía para saber quién es
+ * titular: los equipos que vienen en el evento no traen slug.
+ *
+ * Ojo: es el roster VIGENTE, no el del día del partido. Para un partido viejo
+ * puede marcar como suplente a alguien que entonces era titular.
+ */
+let rosterIndex = null;
+export async function getRosterIndex() {
+  if (rosterIndex) return rosterIndex;
+  try {
+    const data = await gw('getTeams?hl=es-ES', 3_600_000);
+    rosterIndex = {};
+    for (const t of data?.data?.teams ?? []) {
+      if (!t?.id) continue;
+      rosterIndex[t.id] = {
+        name: t.name,
+        code: t.code,
+        slug: t.slug,
+        players: (t.players ?? []).map((p) => ({
+          id: p.id,
+          name: p.summonerName,
+          role: p.role,
+        })),
+      };
+    }
+  } catch {
+    rosterIndex = {};
+  }
+  return rosterIndex;
+}
+
 /** Torneo vigente de una liga: el de startDate más reciente que ya empezó. */
 export async function getCurrentTournament(leagueId) {
   const data = await getTournamentsForLeague(leagueId);
@@ -105,18 +138,23 @@ export function feedTimestamp(offsetSeconds = 90, from = Date.now()) {
   return d.toISOString().slice(0, 19) + 'Z';
 }
 
-/** Draft, parche y metadatos. Sin startingTime: frame de inicio. */
-export const getWindow = (gameId, startingTime) =>
+/**
+ * Draft, parche y metadatos. Sin startingTime: frame de inicio.
+ *
+ * `ttl` se puede forzar: el estado de un minuto ya pasado es inmutable y
+ * conviene cachearlo largo, mientras que el frame en vivo debe caducar rápido.
+ */
+export const getWindow = (gameId, startingTime, ttl) =>
   getJSON(
     `${FEED}window/${gameId}` + (startingTime ? `?startingTime=${startingTime}` : ''),
-    { ttl: startingTime ? 8_000 : 300_000 }
+    { ttl: ttl ?? (startingTime ? 8_000 : 300_000) }
   );
 
 /** Stats por jugador: ítems, runas, damage share, participación en kills, wards. */
-export const getDetails = (gameId, startingTime) =>
+export const getDetails = (gameId, startingTime, ttl) =>
   getJSON(
     `${FEED}details/${gameId}` + (startingTime ? `?startingTime=${startingTime}` : ''),
-    { ttl: 8_000 }
+    { ttl: ttl ?? 8_000 }
   );
 
 /* ------------------------------------------------------------------ *
@@ -174,26 +212,57 @@ export function championIcon(championId) {
   return `https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/champion/${key}.png`;
 }
 
+/** Clave de Data Dragon para un championId del feed ("KSante" -> "KSante"). */
+export function ddragonKey(championId) {
+  if (!ddragonKeys) return null;
+  return ddragonKeys[String(championId ?? '').toLowerCase().replace(/[^a-z]/g, '')] ?? null;
+}
+
+export function itemIcon(id) {
+  if (!ddragonVersion || !id) return null;
+  return `https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/item/${id}.png`;
+}
+
+export const listDDragonVersions = () =>
+  getJSON('https://ddragon.leagueoflegends.com/api/versions.json', { ttl: 86_400_000 });
+
+/** Ficha completa de un campeón en una versión dada (stats y habilidades). */
+export const championDetail = (version, key) =>
+  getJSON(`https://ddragon.leagueoflegends.com/cdn/${version}/data/es_ES/champion/${key}.json`, {
+    ttl: 86_400_000,
+  });
+
 /* ------------------------------------------------------------------ *
  * Utilidades
  * ------------------------------------------------------------------ */
 
-/** Corre tareas con concurrencia limitada; no revienta el feed con 200 requests. */
+/**
+ * Corre tareas con concurrencia limitada; no revienta el feed con 200 requests.
+ *
+ * Devuelve además la lista de fallos. Antes los tragaba y devolvía null, con lo
+ * cual un torneo con 7 mapas caídos se reportaba como si tuviera 7 mapas menos
+ * y nadie se enteraba: exactamente "dejar que la ausencia de datos se convierta
+ * en un número". Ahora el que llama tiene que decidir qué hacer con los fallos.
+ */
 export async function pool(items, limit, worker) {
-  const out = new Array(items.length);
+  const results = new Array(items.length);
+  const failures = [];
   let i = 0;
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (i < items.length) {
       const idx = i++;
       try {
-        out[idx] = await worker(items[idx], idx);
-      } catch {
-        out[idx] = null;
+        results[idx] = await worker(items[idx], idx);
+      } catch (e) {
+        // Una cancelación no es un fallo de datos: hay que dejarla propagar.
+        if (e?.name === 'AbortError') throw e;
+        results[idx] = null;
+        failures.push({ index: idx, error: e?.message ?? String(e) });
       }
     }
   });
   await Promise.all(runners);
-  return out;
+  return { results, failures };
 }
 
 /** Las imágenes de equipo vienen en http://; forzamos https para no romper Pages. */
