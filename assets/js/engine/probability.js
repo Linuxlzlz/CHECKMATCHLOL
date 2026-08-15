@@ -27,6 +27,13 @@ export const WEIGHTS = {
 };
 
 /**
+ * Topes. Una ventaja de 16k al minuto 30 es abrumadora, pero este modelo es
+ * lineal y crudo: dejarlo llegar a 0% o 100% sería fingir una precisión que no
+ * tiene. Se acota el aporte del estado y el total resultante.
+ */
+export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
+
+/**
  * @param {object} input
  * @param {{wins:number,losses:number}|null} input.recordA
  * @param {{wins:number,losses:number}|null} input.recordB
@@ -34,7 +41,7 @@ export const WEIGHTS = {
  * @param {number|null} input.goldDiff  oro A - oro B (null si no arrancó)
  * @param {number|null} input.minute
  */
-export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute }) {
+export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute, finished = false }) {
   const components = [];
   let x = logit(0.5); // 0
 
@@ -89,29 +96,49 @@ export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute }
     }
   }
 
-  // 3. Estado de la partida.
-  if (goldDiff !== null && goldDiff !== undefined && minute) {
+  // 3. Estado de la partida. En un mapa terminado no entra: el resultado ya se
+  //    sabe y una "probabilidad" de 0% no es una predicción, es un marcador.
+  if (finished) {
+    components.push({
+      id: 'state',
+      label: 'Estado de la partida',
+      detail: 'El mapa terminó. El estado se excluye del número.',
+      contrib: 0,
+      excluded: true,
+      note:
+        'Lo que queda abajo es la lectura PREVIA: lo que decían la calidad de equipos y el ' +
+        'draft antes de jugarse. Eso es lo único que sirve para calibrar.',
+    });
+  } else if (goldDiff !== null && goldDiff !== undefined && minute) {
     // El mismo oro pesa más tarde que temprano.
     const ramp = Math.min(1, Math.max(0, (minute - 8) / 17));
-    const contrib = WEIGHTS.goldPerK * (goldDiff / 1000) * ramp;
+    const raw = WEIGHTS.goldPerK * (goldDiff / 1000) * ramp;
+    const contrib = Math.max(-CLAMP.stateLogOdds, Math.min(CLAMP.stateLogOdds, raw));
     x += contrib;
     components.push({
       id: 'state',
       label: 'Estado de la partida',
       detail:
         `${goldDiff >= 0 ? '+' : ''}${goldDiff.toLocaleString('es')} de oro al minuto ${minute.toFixed(0)} · ` +
-        `peso por minuto ×${ramp.toFixed(2)}`,
+        `peso por minuto ×${ramp.toFixed(2)}` +
+        (contrib !== raw ? ` · acotado desde ${raw.toFixed(2)}` : ''),
       contrib,
       note:
         Math.abs(goldDiff) < 1000 && minute >= 20
           ? 'Menos de 1k al minuto 20 es empate, y el empate favorece a quien tiene mejor tardío.'
-          : null,
+          : contrib !== raw
+            ? 'Aporte acotado: el modelo es lineal y crudo, no puede afirmar certezas.'
+            : null,
     });
   }
 
-  const p = sigmoid(x);
+  const rawP = sigmoid(x);
+  const p = Math.max(CLAMP.pMin, Math.min(CLAMP.pMax, rawP));
   return {
     p,
+    rawP,
+    clamped: p !== rawP,
+    finished: !!finished,
     components,
     logOdds: x,
     hasQuality: wa !== null && wb !== null,

@@ -125,6 +125,7 @@ export const getDetails = (gameId, startingTime) =>
 
 let ddragonVersion = null;
 let ddragonKeys = null;
+let ddragonNames = null;
 
 export async function initDDragon() {
   if (ddragonKeys) return;
@@ -138,14 +139,31 @@ export async function initDDragon() {
       { ttl: 86_400_000 }
     );
     ddragonKeys = {};
+    ddragonNames = {};
     for (const c of Object.values(champs.data)) {
-      ddragonKeys[c.id.toLowerCase().replace(/[^a-z]/g, '')] = c.id;
-      ddragonKeys[c.name.toLowerCase().replace(/[^a-z]/g, '')] = c.id;
+      const byId = c.id.toLowerCase().replace(/[^a-z]/g, '');
+      const byName = c.name.toLowerCase().replace(/[^a-z]/g, '');
+      ddragonKeys[byId] = c.id;
+      ddragonKeys[byName] = c.id;
+      ddragonNames[byId] = c.name;
+      ddragonNames[byName] = c.name;
     }
   } catch {
-    // Sin Data Dragon el sitio funciona igual, solo sin retratos.
+    // Sin Data Dragon el sitio funciona igual, solo sin retratos ni nombres bonitos.
     ddragonKeys = {};
+    ddragonNames = {};
   }
+}
+
+/**
+ * Nombre visible del campeón. El feed devuelve la clave de Data Dragon
+ * ("KSante", "XinZhao"), que se ve mal en pantalla. La coincidencia con la
+ * tabla congelada se hace aparte con norm(), así que esto es solo presentación.
+ */
+export function championName(championId) {
+  if (!ddragonNames) return championId;
+  const k = String(championId ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return ddragonNames[k] ?? championId;
 }
 
 export function championIcon(championId) {

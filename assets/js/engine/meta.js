@@ -242,28 +242,34 @@ export function championLayer(index, champions) {
         reason: 'Cero picks en el torneo. Es sin datos, no "pick sorpresa": ni vos ni el equipo pueden estimarlo.',
       };
     }
+    const pk = (n) => `${n} ${n === 1 ? 'pick' : 'picks'}`;
     if (c.picks < MIN_PICKS) {
       return {
         champion,
         picks: c.picks,
         admits: false,
         status: 'excluido',
-        reason: `${c.picks} picks, por debajo de ${MIN_PICKS}. Con menos es ruido y no entra.`,
+        reason: `${pk(c.picks)}, por debajo de ${MIN_PICKS}. Con menos es ruido y no entra.`,
       };
     }
     const ci = c.attributed >= MIN_PICKS ? wilson(c.wins, c.attributed) : null;
+    // Un IC que cruza el 50% no distingue al campeón de una moneda.
+    const straddles = ci ? ci.low <= 0.5 && ci.high >= 0.5 : null;
     return {
       champion,
       picks: c.picks,
       attributed: c.attributed,
       wins: c.wins,
-      wr: ci?.p ?? null,
+      wr: ci && !straddles ? ci.p : null,
       ci,
+      straddles,
       admits: true,
       status: 'admitido',
       reason: ci
-        ? `${c.picks} picks · winrate ${(ci.p * 100).toFixed(0)}% sobre ${c.attributed} mapas con resultado atribuible, IC95 [${(ci.low * 100).toFixed(0)}, ${(ci.high * 100).toFixed(0)}]`
-        : `${c.picks} picks · winrate no reportable: solo ${c.attributed} mapas con resultado atribuible.`,
+        ? `${pk(c.picks)} · winrate ${(ci.p * 100).toFixed(0)}% sobre ${c.attributed} mapas con ` +
+          `resultado atribuible, IC95 [${(ci.low * 100).toFixed(0)}, ${(ci.high * 100).toFixed(0)}]` +
+          (straddles ? ' — el IC cruza el 50%, así que no distingue al campeón de una moneda.' : '')
+        : `${pk(c.picks)} · winrate no reportable: solo ${c.attributed} mapas con resultado atribuible.`,
     };
   });
 }
@@ -308,7 +314,7 @@ export function playerLayer(index, players) {
             ? rec.games >= 20
               ? `0 partidas con ${p.champion} en ${rec.games} del torneo. Con 20+ partidas de muestra, la ausencia es observable.`
               : `0 partidas con ${p.champion}, pero solo ${rec.games} en total: su cero no informa.`
-            : `${champGames} partidas. Conteo = observación, no regla: acertó 5 veces seguidas y después falló en las dos direcciones el mismo día.`,
+            : `${champGames} ${champGames === 1 ? 'partida' : 'partidas'}. Conteo = observación, no regla: acertó 5 veces seguidas y después falló en las dos direcciones el mismo día.`,
     };
   });
 }

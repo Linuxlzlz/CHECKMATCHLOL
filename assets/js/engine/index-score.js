@@ -110,8 +110,14 @@ export function band(delta) {
  * escalado, que es un campeón puntuado 2 en vez de 3 por juicio propio. Los
  * z-scores amplifican los ejes de dispersión estrecha, así que por debajo de
  * ~1 punto crudo el eje no se narra por alto que sea el z.
+ *
+ * El umbral se compara con ESTRICTAMENTE MAYOR: el fallo registrado ocurrió
+ * sobre exactamente 1.0 punto, así que 1.0 no alcanza para narrar.
  */
 export const RAW_NARRATABLE_MIN = 1.0;
+
+/** Único punto de decisión sobre si un eje es narrable. */
+export const isNarratable = (rawDelta) => Math.abs(rawDelta) > RAW_NARRATABLE_MIN;
 
 /**
  * Puntúa dos drafts. Devuelve la misma estructura que `score_draft.py --json`
@@ -156,7 +162,7 @@ export function scoreDraft(a, b) {
       dRaw,
       sd: REFERENCE_STATS[k].sd,
       favors: dRaw === 0 ? null : dRaw > 0 ? A.team : B.team,
-      narratable: Math.abs(dRaw) >= RAW_NARRATABLE_MIN,
+      narratable: isNarratable(dRaw),
     };
   });
 

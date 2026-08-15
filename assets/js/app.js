@@ -8,7 +8,7 @@
 
 import {
   LEAGUES, getSchedule, getLive, getEventDetails, getStandings, getCurrentTournament,
-  getWindow, getDetails, feedTimestamp, initDDragon, championIcon, secure,
+  getWindow, getDetails, feedTimestamp, initDDragon, championIcon, championName, secure,
 } from './api.js';
 import { scoreDraft, isClassified } from './engine/index-score.js';
 import {
@@ -147,7 +147,9 @@ function renderMatchList() {
 
 function matchItem(e, isLive) {
   const [t1, t2] = e.match.teams;
-  const score = t1.result || t2.result
+  // Un partido sin empezar trae result {gameWins:0}; mostrar "0-0" ahí es ruido.
+  const played = e.state === 'completed' || isLive;
+  const score = played
     ? `<span class="score">${t1.result?.gameWins ?? 0}-${t2.result?.gameWins ?? 0}</span>` : '';
   const when = new Date(e.startTime).toLocaleString('es', {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -307,6 +309,7 @@ async function renderMatch(ev, force) {
     tfDelta: score.tfDelta,
     goldDiff: st ? st.a.gold - st.b.gold : null,
     minute,
+    finished: game?.state === 'completed',
   });
   const stance = bettingStance({ p: prob.p, marketP: null });
 
@@ -410,7 +413,11 @@ function matchHeader(ev, game, games) {
         </div>
       </div>
       <div class="game-tabs">${tabs}</div>
-      <div class="muted-xs">${esc(ev.league?.name ?? '')} · ${esc(ev.match?.strategy?.type === 'bestOf' ? `Bo${ev.match.strategy.count}` : '')} · ${esc(ev.blockName ?? '')}</div>
+      <div class="muted-xs">${[
+        ev.league?.name,
+        ev.match?.strategy?.type === 'bestOf' ? `Bo${ev.match.strategy.count}` : null,
+        ev.blockName,
+      ].filter(Boolean).map(esc).join(' · ')}</div>
     </div>
   </div>`;
 }
@@ -421,7 +428,7 @@ function championCell(p) {
   return `<div class="champ">
       ${icon ? `<img src="${esc(icon)}" alt="" loading="lazy">` : '<div class="champ-img-ph"></div>'}
       <div class="champ-txt">
-        <div class="champ-name">${esc(p.champion)}</div>
+        <div class="champ-name">${esc(championName(p.champion))}</div>
         <div class="champ-player">${esc(p.name)}</div>
         ${unk}
       </div>
@@ -517,7 +524,7 @@ function cardConcentration(edges, axes, blue, red) {
     ? edges.map((e) => `
         <div class="edge-item">
           <div class="edge-title">${esc(e.label)} — <span class="accent">${esc(e.side)}</span></div>
-          ${e.carrier ? `<div class="edge-carrier">Lo carga ${esc(e.carrier.champion)} (${esc(ROLE_LABEL[e.carrier.role] ?? e.carrier.role)}, ${esc(e.carrier.name)})</div>` : ''}
+          ${e.carrier ? `<div class="edge-carrier">Lo carga ${esc(championName(e.carrier.champion))} (${esc(ROLE_LABEL[e.carrier.role] ?? e.carrier.role)}, ${esc(e.carrier.name)})</div>` : ''}
         </div>`).join('')
     : `<p class="muted">Ningún eje estructural concentra margen suficiente para nombrarlo. Mapa parejo en estructura.</p>`;
 
@@ -569,7 +576,7 @@ function cardChampionLayer(la, lb, blue, red) {
   const side = (l, s) => l.map((c) => `
     <div class="layer-row">
       <div>
-        <div><strong>${esc(c.champion)}</strong>
+        <div><strong>${esc(championName(c.champion))}</strong>
           <span class="badge ${c.admits ? 'badge-ok' : c.status === 'sin-datos' ? 'badge-warn' : 'badge-no'}">
             ${c.admits ? 'admitido' : c.status === 'sin-datos' ? 'sin datos' : 'excluido'}</span></div>
         <div class="layer-reason">${esc(c.reason)}</div>
@@ -607,7 +614,7 @@ function cardPlayerLayer(pa, pb, blue, red, ca, cb) {
   const side = (l) => l.map((p) => `
     <div class="layer-row">
       <div>
-        <div><strong>${esc(p.name)}</strong> <span class="muted-xs">${esc(p.champion)}</span>
+        <div><strong>${esc(p.name)}</strong> <span class="muted-xs">${esc(championName(p.champion))}</span>
           <span class="badge ${p.admits ? 'badge-ok' : p.status === 'observacion' ? 'badge-blue' : 'badge-no'}">
             ${p.admits ? 'entra' : p.status === 'observacion' ? 'observación' : 'sin datos'}</span></div>
         <div class="layer-reason">${esc(p.reason)}</div>
@@ -669,7 +676,7 @@ function cardWindow(w) {
         <div class="delta-num">${w.from}–${w.to}<span style="font-size:15px"> min</span></div>
         <div class="delta-meta">
           <div><strong>${esc(w.earlySide)}</strong> tiene la ventana corta · <strong>${esc(w.lateSide)}</strong> escala</div>
-          <div class="muted-xs">Brecha de escalado: ${w.gapRaw} puntos crudos</div>
+          <div class="muted-xs">Brecha de escalado: ${w.gapRaw} ${w.gapRaw === 1 ? 'punto crudo' : 'puntos crudos'}</div>
         </div>
       </div>
       <ul class="checklist">${w.claims.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
@@ -688,22 +695,28 @@ function cardReading(score, prob, stance, blue, red, dis) {
         <div class="muted-xs">${esc(c.detail)}</div>
         ${c.note ? `<div class="muted-xs" style="margin-top:3px">${esc(c.note)}</div>` : ''}
       </div>
-      <div class="comp-contrib ${c.contrib > 0 ? 'pos' : c.contrib < 0 ? 'neg' : 'zero'}">
-        ${c.contrib >= 0 ? '+' : ''}${c.contrib.toFixed(3)}
+      <div class="comp-contrib ${c.excluded ? 'zero' : c.contrib > 0 ? 'pos' : c.contrib < 0 ? 'neg' : 'zero'}">
+        ${c.excluded ? '—' : `${c.contrib >= 0 ? '+' : ''}${c.contrib.toFixed(3)}`}
       </div>
     </div>`).join('');
 
   return `
   <div class="card">
-    <div class="card-head"><h3>Lectura</h3><span class="muted-xs">probabilidad construida por componentes</span></div>
+    <div class="card-head"><h3>Lectura</h3>
+      <span class="muted-xs">${prob.finished ? 'lectura previa, retrospectiva' : 'probabilidad construida por componentes'}</span></div>
     <div class="card-body">
-      <div class="prob-hero">
+      ${prob.finished ? `<div class="note">Este mapa ya terminó. El número de abajo es lo que decían
+        <strong>la calidad de equipos y el draft antes de jugarse</strong>, no una predicción del
+        resultado que ya conocés. El estado final está en la tarjeta de arriba.</div>` : ''}
+      <div class="prob-hero" style="margin-top:${prob.finished ? '12px' : '0'}">
         <div class="prob-num">${(pa * 100).toFixed(0)}%</div>
         <div class="prob-bar">
           <span class="pa" style="width:${pa * 100}%">${esc(blue.team)}</span>
           <span class="pb" style="width:${pb * 100}%">${esc(red.team)}</span>
         </div>
       </div>
+      ${prob.clamped ? `<div class="note note-warn">Número acotado a la banda [4%, 96%]: el modelo es
+        lineal y crudo, y dejarlo llegar a los extremos sería fingir precisión.</div>` : ''}
       ${!prob.hasQuality ? `<div class="note note-warn">Falta el componente de calidad de equipos, que suele ser casi todo el margen. Este número vale mucho menos de lo que aparenta.</div>` : ''}
       <div style="margin-top:10px">${comps}</div>
 

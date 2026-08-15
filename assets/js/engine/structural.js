@@ -9,7 +9,7 @@
  * "Si un dato no está, que falte ruidosamente."
  */
 
-import { rawScores, norm, RAW_NARRATABLE_MIN } from './index-score.js';
+import { rawScores, norm, RAW_NARRATABLE_MIN, isNarratable } from './index-score.js';
 import { ARCHETYPES_CSV } from '../data/tables.js';
 
 const ROLE_ORDER = ['top', 'jungle', 'mid', 'bottom', 'support'];
@@ -170,7 +170,7 @@ export function structuralAxes(sideA, sideB) {
         : rawA.scores.scaling > rawB.scores.scaling
           ? sideA.team
           : sideB.team,
-    narratable: Math.abs(rawA.scores.scaling - rawB.scores.scaling) >= RAW_NARRATABLE_MIN,
+    narratable: isNarratable(rawA.scores.scaling - rawB.scores.scaling),
   });
 
   // 7. Coherencia interna de tempo: ¿los cinco quieren ganar en el mismo minuto?
@@ -308,13 +308,16 @@ export function concentrationAndWindow(sideA, sideB, axes) {
   const scaling = axes.find((x) => x.id === 'scaling');
   const dScale = scaling.a - scaling.b;
   let window;
-  if (Math.abs(dScale) < RAW_NARRATABLE_MIN) {
+  if (!isNarratable(dScale)) {
+    const n = Math.abs(dScale);
     window = {
       declared: false,
       reason:
-        `La brecha de escalado es de ${Math.abs(dScale).toFixed(0)} punto(s) crudo(s), por debajo ` +
-        `del umbral de ${RAW_NARRATABLE_MIN}. No hay ventana narrable: afirmar una sería construir ` +
-        `una narrativa sobre ruido, que es exactamente el fallo registrado el 15/08.`,
+        `La brecha de escalado es de ${n.toFixed(0)} ${n === 1 ? 'punto crudo' : 'puntos crudos'}, ` +
+        `y el umbral para narrar un eje es más de ${RAW_NARRATABLE_MIN}. No hay ventana declarable: ` +
+        `sobre exactamente 1 punto ya se construyó una narrativa de "ventana con fecha de ` +
+        `vencimiento" el 15/08 y perdió. Un punto en una suma de cinco campeones es un campeón ` +
+        `puntuado 2 en vez de 3 por juicio propio.`,
     };
   } else {
     const late = dScale > 0 ? sideA : sideB;

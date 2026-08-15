@@ -107,7 +107,14 @@ Esto sirve para entender partidos, no para justificar una entrada.
 ## Desarrollo
 
 No hay pasos de build. Cualquier servidor estático sirve; los módulos ES necesitan HTTP, no
-`file://`.
+`file://`. Si no tenés Node ni Python a mano, el repo trae un servidor mínimo que solo usa
+componentes de Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\serve.ps1
+```
+
+Después abrí http://localhost:8099/.
 
 ## Licencia y créditos
 
