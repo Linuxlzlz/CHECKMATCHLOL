@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CheckMatch LoL — análisis de drafts en tiempo real</title>
+<meta name="description" content="Lectura estructurada y falsable de drafts de LoL competitivo, con datos en vivo del feed oficial de LoL Esports.">
+<link rel="stylesheet" href="assets/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="brand-mark">CM</span>
+    <div>
+      <h1>CheckMatch<span class="accent">LoL</span></h1>
+      <p class="tagline">Lectura estructurada y falsable de drafts profesionales</p>
+    </div>
+  </div>
+  <div class="top-right">
+    <span id="live-pill" class="pill pill-idle" hidden></span>
+    <button id="refresh" class="btn-ghost" title="Actualizar">↻</button>
+  </div>
+</header>
+
+<nav class="leagues" id="leagues" aria-label="Ligas"></nav>
+
+<main class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <h2 id="league-title">Partidos</h2>
+      <span id="tournament-label" class="muted-xs"></span>
+    </div>
+    <div id="match-list" class="match-list">
+      <div class="skeleton-list">
+        <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="content" id="content">
+    <div class="empty-state">
+      <div class="empty-mark">🎯</div>
+      <h2>Elegí un partido</h2>
+      <p>El análisis se arma con el draft real del feed oficial. Los partidos en vivo se
+         actualizan solos cada 20 segundos.</p>
+      <p class="muted-xs">Si un mapa todavía no arrancó, el feed viene vacío. No es un error: es un "todavía no".</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>
+    Datos del feed oficial de LoL Esports y Data Dragon. El índice de composición está
+    congelado contra una referencia de 62 comps profesionales y su banda grande vale
+    <strong>74%</strong> (n=31, IC95 [57, 86]): falla una de cada cuatro.
+  </p>
+  <p class="muted-xs">
+    Postura por defecto <strong>NO BET</strong>. En backtest, el análisis propio no le ganó al
+    mercado (Brier 0.2368 contra 0.2353, λ*=0). Esto es una herramienta para entender partidos,
+    no para justificar una entrada.
+  </p>
+</footer>
+
+<script type="module" src="assets/js/app.js"></script>
+</body>
+</html>
