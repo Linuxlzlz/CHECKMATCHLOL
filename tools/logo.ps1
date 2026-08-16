@@ -253,7 +253,10 @@ Export-Sizes $framed "checkmatch-logo" @(1024, 512, 400, 180, 64, 32)
 $framed.Dispose()
 
 # Sin marco y con el trazo más grande: pensado para el recorte circular.
+# La escala es 1.08 y no más: a 1.16 el tope izquierdo de la barra quedaba a r=503
+# de un radio de 512, o sea rozando el borde del círculo. A 1.08 queda en 468 y
+# respira. Se ve en el mock que arma tools/banner.ps1.
 $rand = New-Object System.Random 20260816   # mismo grano en las dos variantes
-$avatar = Render-Logo $false 1.16
+$avatar = Render-Logo $false 1.08
 Export-Sizes $avatar "checkmatch-avatar" @(1024, 512, 400)
 $avatar.Dispose()

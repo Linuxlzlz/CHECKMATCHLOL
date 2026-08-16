@@ -371,6 +371,33 @@ forma sostenida, el número propio no aporta sobre el precio.
 - El índice de torneo depende de que la liga tenga partidos terminados en el split vigente.
 - Los ejes estructurales se derivan de una tabla de juicio, no de datos medidos.
 
+## Marca
+
+El logo es la marca de verificación dibujada como una **barra de error**: el check es el trazo, y
+debajo va la línea del intervalo con sus dos topes y el punto estimado corrido del centro. Es la
+firma del proyecto — nada se afirma sin su intervalo, y el punto casi nunca cae donde uno querría.
+
+La estética es la del cliente de League, que ya comparte paleta con la página: tinta azulada, oro
+Hextech con bisel, rombos y esquinas cortadas, y el punto estimado como hexágono en el azul de
+acento.
+
+| Archivo | Uso |
+|---|---|
+| `checkmatch-logo-*.jpg` | Favicon, apple-touch-icon y `og:image`. Con marco. |
+| `checkmatch-avatar-*.jpg` | **Avatar de Twitter.** Sin marco, porque ahí el recorte es circular y las esquinas del marco caen fuera. |
+| `checkmatch-banner-1500x500.jpg` | **Encabezado de Twitter.** |
+
+Todo se genera con `tools/logo.ps1` y `tools/banner.ps1` (System.Drawing, sin dependencias) y con
+semilla fija, así que el grano es reproducible byte a byte.
+
+Las dos restricciones del formato que definen las composiciones, las dos verificadas con un mock
+compuesto y no a ojo:
+
+- El **avatar tapa la esquina inferior izquierda del banner**, así que el trazo arranca recién en
+  x=344 y el bloque de texto en x=650.
+- El avatar se recorta en **círculo**: en la variante de avatar el punto más lejano queda a r=468 de
+  un radio de 512. A escala 1.16 quedaba en 503, rozando el borde.
+
 ## Desarrollo
 
 No hay pasos de build. Cualquier servidor estático sirve; los módulos ES necesitan HTTP, no
