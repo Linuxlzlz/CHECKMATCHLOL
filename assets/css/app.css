@@ -200,6 +200,17 @@ button { font: inherit; cursor: pointer; }
 .champ-name { font-weight: 600; }
 .champ-player { font-size: 11px; color: var(--text-mute); }
 .unclassified { color: var(--warn); font-size: 10px; }
+.unclassified.ext { color: var(--text-mute); }
+.unclassified.manual { color: var(--accent); }
+
+/* perfil de 7 ejes en crudo, al lado del campeón */
+.champ-axes { display: flex; gap: 2px; margin-top: 3px; }
+.champ-axes .ax {
+  width: 13px; height: 13px; display: grid; place-items: center; border-radius: 3px;
+  font-size: 9px; font-family: var(--mono); background: var(--bg-inset); color: var(--text-mute);
+}
+.champ-axes .ax.hi { background: rgba(77,163,255,.2); color: var(--accent); font-weight: 700; }
+.champ-axes .ax.zero { opacity: .38; }
 
 /* index axes */
 .delta-hero {
@@ -365,3 +376,159 @@ button { font: inherit; cursor: pointer; }
 }
 .checklist { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
 .checklist li { font-size: 12.5px; color: var(--text-dim); }
+
+/* ================================================================== *
+ * resumen, diagnóstico, tarjetas plegables y editor
+ * ================================================================== */
+
+/* --- resumen ejecutivo: la respuesta antes del informe ------------- */
+.card.summary { border-color: var(--accent-dim); background: linear-gradient(180deg, #16202f, var(--bg-card)); }
+.summary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 14px;
+}
+.sum-cell { min-width: 0; }
+.sum-k {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-mute); font-weight: 700; margin-bottom: 3px;
+}
+.sum-v { font-size: 25px; font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; }
+.sum-v.small { font-size: 14.5px; font-weight: 650; line-height: 1.3; }
+.sum-team { font-size: 14px; color: var(--text-dim); font-weight: 600; }
+.ok-txt { color: var(--green); }
+.warn-txt { color: var(--warn); }
+.summary-state {
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--text-dim);
+}
+.summary-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.stance-mini {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .08em; padding: 4px 9px;
+  border-radius: 5px; background: rgba(240,167,66,.13); color: var(--warn);
+  border: 1px solid rgba(240,167,66,.3);
+}
+
+/* --- tarjetas plegables -------------------------------------------- */
+.card.fold > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  display: flex; align-items: baseline; gap: 10px;
+}
+.card.fold > summary::-webkit-details-marker { display: none; }
+.card.fold > summary:hover { background: rgba(77,163,255,.04); }
+.card.fold .chev {
+  margin-left: auto; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid var(--text-mute); border-bottom: 2px solid var(--text-mute);
+  transform: rotate(45deg) translateY(-2px); transition: transform .15s;
+}
+.card.fold[open] .chev { transform: rotate(-135deg) translateY(-2px); }
+
+/* --- diagnóstico ---------------------------------------------------- */
+.diag {
+  padding: 11px 13px; border-radius: 8px; margin-top: 9px;
+  background: var(--bg-inset); border: 1px solid var(--line); border-left-width: 3px;
+}
+.diag-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.diag-title { font-size: 13.5px; font-weight: 600; }
+.diag-detail { font-size: 12.5px; color: var(--text-dim); margin-top: 5px; }
+.diag-tag {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  padding: 3px 7px; border-radius: 4px; white-space: nowrap;
+}
+.diag-act { margin-left: auto; }
+.sev-block { border-left-color: var(--danger); }
+.sev-block .diag-tag { background: rgba(255,92,92,.15); color: #ff8f8f; }
+.sev-partial { border-left-color: var(--warn); }
+.sev-partial .diag-tag { background: rgba(240,167,66,.14); color: var(--warn); }
+.sev-known { border-left-color: var(--line); }
+.sev-known .diag-tag { background: rgba(154,167,189,.12); color: var(--text-mute); }
+
+/* --- winrate con su intervalo dibujado ------------------------------ */
+.wr-bar {
+  position: relative; height: 16px; margin: 7px 0 3px; border-radius: 4px;
+  background: var(--bg-inset); border: 1px solid var(--line-soft);
+}
+.wr-ci { position: absolute; top: 3px; bottom: 3px; background: rgba(77,163,255,.28); border-radius: 3px; }
+.wr-bar.straddles .wr-ci { background: rgba(240,167,66,.22); }
+.wr-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--text-mute); }
+.wr-dot {
+  position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); transform: translate(-50%, -50%);
+}
+.wr-bar.straddles .wr-dot { background: var(--warn); }
+
+.layer-main { min-width: 0; }
+.layer-split { font-size: 11.5px; color: var(--text-mute); margin-top: 3px; }
+.layer-split.fallback { color: var(--text-dim); border-left: 2px solid var(--line); padding-left: 8px; }
+.mini-champ { width: 19px; height: 19px; border-radius: 4px; vertical-align: -4px; margin-right: 5px; }
+.side-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  margin-bottom: 5px;
+}
+.index-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line-soft);
+}
+
+/* --- lista de partidos: filtro y paginación ------------------------- */
+.list-tools {
+  display: flex; align-items: center; gap: 9px; padding: 11px 13px;
+  border-bottom: 1px solid var(--line-soft); position: sticky; top: 0;
+  background: var(--bg-raise); z-index: 2;
+}
+.search {
+  flex: 1; min-width: 0; background: var(--bg-inset); border: 1px solid var(--line);
+  color: var(--text); border-radius: 7px; padding: 7px 10px; font: inherit; font-size: 13px;
+}
+.search:focus { outline: 0; border-color: var(--accent); }
+.group-n {
+  font-size: 10px; color: var(--text-mute); background: var(--bg-inset);
+  padding: 1px 6px; border-radius: 100px; margin-left: 6px; font-weight: 600;
+}
+.list-more { display: block; width: calc(100% - 26px); margin: 12px 13px 16px; text-align: center; }
+.tab-win {
+  font-size: 9.5px; font-weight: 800; margin-left: 6px; padding: 1px 5px; border-radius: 3px;
+  background: rgba(62,207,142,.15); color: var(--green); letter-spacing: .03em;
+}
+
+/* --- comparación contra el mercado ---------------------------------- */
+.paired {
+  margin: 14px 0; padding: 13px 15px; border-radius: 8px;
+  background: var(--bg-inset); border: 1px solid var(--line);
+}
+.paired-head { font-size: 12px; font-weight: 650; color: var(--text-dim); margin-bottom: 9px; }
+.paired-row { display: grid; grid-template-columns: 70px 1fr 62px; gap: 10px; align-items: center; margin-bottom: 6px; font-size: 12px; }
+.paired-row strong { font-family: var(--mono); font-size: 12px; text-align: right; }
+.pb { height: 8px; background: var(--bg-card); border-radius: 4px; overflow: hidden; }
+.pb i { display: block; height: 100%; background: var(--accent); }
+.pb.mkt i { background: var(--text-mute); }
+.ledger-btns { display: flex; gap: 6px; align-items: flex-start; }
+
+/* --- modal y editor de arquetipos ----------------------------------- */
+.modal-back {
+  position: fixed; inset: 0; z-index: 60; background: rgba(5,8,14,.72);
+  display: grid; place-items: center; padding: 22px; overflow: auto;
+}
+.modal {
+  width: min(760px, 100%); background: var(--bg-card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.55); max-height: 86vh;
+  display: flex; flex-direction: column;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 17px; border-bottom: 1px solid var(--line);
+}
+.modal-body { padding: 15px 17px 20px; overflow: auto; }
+.editor-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+  padding: 12px 0; border-top: 1px solid var(--line-soft);
+}
+.editor-champ { display: flex; align-items: center; gap: 9px; }
+.editor-champ img { width: 34px; height: 34px; border-radius: 6px; }
+.editor-axes { display: flex; gap: 6px; flex-wrap: wrap; }
+.ax-in { display: grid; gap: 2px; justify-items: center; }
+.ax-in span { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-mute); font-weight: 700; }
+.ax-in input {
+  width: 42px; text-align: center; background: var(--bg-inset); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 5px 4px; font: inherit; font-size: 13px;
+}
+.ax-in input:focus { outline: 0; border-color: var(--accent); }
+.editor-btns { display: flex; gap: 6px; }

@@ -7,7 +7,7 @@
  * comparación con el backtest, así que las fórmulas están congeladas.
  */
 
-import { ARCHETYPES_CSV, REFERENCE_CSV, CHAMPION_ALIASES } from '../data/tables.js';
+import { ARCHETYPES_CSV, EXTENSION_CSV, REFERENCE_CSV, CHAMPION_ALIASES } from '../data/tables.js';
 
 export const AXES = ['fl', 'aoe', 'eng', 'pick', 'poke', 'split', 'scale'];
 export const INDEX_AXES = ['teamfight', 'pick', 'split', 'siege', 'scaling'];
@@ -36,29 +36,93 @@ function parseCSV(text) {
   });
 }
 
-const TABLE = (() => {
+function loadCSV(text) {
   const t = {};
-  for (const row of parseCSV(ARCHETYPES_CSV)) {
+  for (const row of parseCSV(text)) {
     const v = {};
     for (const a of AXES) v[a] = parseFloat(row[a]);
+    v.champion = row.champion;
     t[norm(row.champion)] = v;
   }
   return t;
+}
+
+/** Tabla congelada. Define la escala y NO se toca. */
+const FROZEN = loadCSV(ARCHETYPES_CSV);
+
+/** Extensión: campeones que faltaban en la congelada. Ver tables.js. */
+const EXTENSION = loadCSV(EXTENSION_CSV);
+
+/**
+ * Clasificaciones manuales del usuario, guardadas en el navegador.
+ *
+ * Un campeón que no está en ninguna tabla suma cero y deja el draft sin
+ * diagnóstico. En vez de inventarle un perfil, el sitio lo declara y ofrece
+ * puntuarlo a mano; lo que se puntúa acá queda marcado como "manual" en todas
+ * las lecturas, para que nunca se confunda con la tabla congelada.
+ */
+const MANUAL_KEY = 'cml:archetypes:v1';
+let MANUAL = (() => {
+  try {
+    const raw = localStorage.getItem(MANUAL_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
 })();
+
+export function manualTable() {
+  return MANUAL;
+}
+
+/** Guarda (o borra, con `null`) el perfil manual de un campeón. */
+export function setManualProfile(champion, values) {
+  const k = norm(champion);
+  if (!values) delete MANUAL[k];
+  else {
+    const v = { champion };
+    for (const a of AXES) v[a] = Math.max(0, Math.min(3, Number(values[a]) || 0));
+    MANUAL[k] = v;
+  }
+  try {
+    localStorage.setItem(MANUAL_KEY, JSON.stringify(MANUAL));
+  } catch { /* cuota llena: vale para esta sesión */ }
+  return MANUAL[k] ?? null;
+}
+
+export function clearManualProfiles() {
+  MANUAL = {};
+  try { localStorage.removeItem(MANUAL_KEY); } catch { /* nada */ }
+}
+
+/** Fila vigente de un campeón, mirando manual → extensión → congelada. */
+export function profileRow(champion) {
+  const k = norm(champion);
+  return MANUAL[k] ?? EXTENSION[k] ?? FROZEN[k] ?? null;
+}
+
+/**
+ * De dónde salió la clasificación: 'congelado' | 'extension' | 'manual' | null.
+ * Se muestra en la UI porque las tres tienen distinto peso epistémico.
+ */
+export function classificationOf(champion) {
+  const k = norm(champion);
+  if (MANUAL[k]) return 'manual';
+  if (EXTENSION[k]) return 'extension';
+  if (FROZEN[k]) return 'congelado';
+  return null;
+}
+
+export const isClassified = (champion) => classificationOf(champion) !== null;
 
 const REFERENCE_COMPS = parseCSV(REFERENCE_CSV).map((r) => r.champions.split('|'));
 
-/** ¿Está el campeón en la tabla congelada? */
-export function isClassified(champion) {
-  return Object.prototype.hasOwnProperty.call(TABLE, norm(champion));
-}
-
 /** Suma cruda de ejes sobre 5 campeones. Los no clasificados suman 0, como el script. */
-export function rawScores(champions) {
+export function rawScores(champions, { table = null } = {}) {
   const v = Object.fromEntries(AXES.map((a) => [a, 0]));
   const missing = [];
   for (const c of champions) {
-    const row = TABLE[norm(c)];
+    const row = table ? table[norm(c)] : profileRow(c);
     if (row) {
       for (const a of AXES) v[a] += row[a];
     } else {
@@ -70,11 +134,18 @@ export function rawScores(champions) {
   return { scores, axes: v, missing };
 }
 
-/** Media y sd poblacional de la distribución de referencia (62 comps). */
+/**
+ * Media y sd poblacional de la distribución de referencia (62 comps).
+ *
+ * Se calcula con la tabla CONGELADA a propósito, ignorando la extensión: la
+ * escala tiene que seguir siendo la del backtest. "Locke" aparece en las comps
+ * de referencia y no está clasificado, así que cuenta cero acá igual que en
+ * score_draft.py. Mover esto cambia lo que significan las bandas de 0.5 y 1 sd.
+ */
 export const REFERENCE_STATS = (() => {
   const cols = Object.fromEntries(INDEX_AXES.map((k) => [k, []]));
   for (const champs of REFERENCE_COMPS) {
-    const { scores } = rawScores(champs);
+    const { scores } = rawScores(champs, { table: FROZEN });
     for (const k of INDEX_AXES) cols[k].push(scores[k]);
   }
   const stats = {};
@@ -135,7 +206,19 @@ export function scoreDraft(a, b) {
     }
     let primary = INDEX_AXES[0];
     for (const k of INDEX_AXES) if (z[k] > z[primary]) primary = k;
-    return { team: side.team, champions: side.champions, raw: scores, axes, z, primary, missing };
+    const sources = side.champions.map((c) => ({ champion: c, source: classificationOf(c) }));
+    return {
+      team: side.team,
+      champions: side.champions,
+      raw: scores,
+      axes,
+      z,
+      primary,
+      missing,
+      sources,
+      extended: sources.filter((s) => s.source === 'extension').map((s) => s.champion),
+      manual: sources.filter((s) => s.source === 'manual').map((s) => s.champion),
+    };
   });
 
   const warnings = [];
@@ -143,7 +226,15 @@ export function scoreDraft(a, b) {
     if (s.missing.length) {
       warnings.push(
         `${s.team}: sin clasificar ${s.missing.join(', ')} — cuentan como cero y sesgan el ` +
-          `índice hacia abajo. Tratá ese lado como incertidumbre, no como debilidad.`
+          `índice hacia abajo. Tratá ese lado como incertidumbre, no como debilidad. ` +
+          `Se pueden puntuar a mano desde el panel de diagnóstico.`
+      );
+    }
+    if (s.manual.length) {
+      warnings.push(
+        `${s.team}: ${s.manual.join(', ')} usa${s.manual.length === 1 ? '' : 'n'} una ` +
+          `clasificación manual tuya, no la tabla congelada. El índice de este lado depende de ` +
+          `ese juicio.`
       );
     }
   }

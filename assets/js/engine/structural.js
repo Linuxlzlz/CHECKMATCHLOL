@@ -9,8 +9,7 @@
  * "Si un dato no está, que falte ruidosamente."
  */
 
-import { rawScores, norm, RAW_NARRATABLE_MIN, isNarratable } from './index-score.js';
-import { ARCHETYPES_CSV } from '../data/tables.js';
+import { rawScores, RAW_NARRATABLE_MIN, isNarratable, profileRow } from './index-score.js';
 
 const ROLE_ORDER = ['top', 'jungle', 'mid', 'bottom', 'support'];
 export const ROLE_LABEL = {
@@ -21,21 +20,12 @@ export const ROLE_LABEL = {
   support: 'Support',
 };
 
-// Perfil por campeón, para poder mirar campeón a campeón y no solo la suma.
-const PROFILE = (() => {
-  const lines = ARCHETYPES_CSV.trim().split('\n');
-  const head = lines[0].split(',');
-  const out = {};
-  for (const line of lines.slice(1)) {
-    const c = line.split(',');
-    const row = {};
-    head.forEach((h, i) => (row[h] = h === 'champion' ? c[i] : parseFloat(c[i])));
-    out[norm(row.champion)] = row;
-  }
-  return out;
-})();
-
-export const profileOf = (champion) => PROFILE[norm(champion)] ?? null;
+/**
+ * Perfil por campeón, para mirar campeón a campeón y no solo la suma.
+ * Sale del mismo resolutor que el índice (manual → extensión → congelada), así
+ * que los ejes estructurales y el índice nunca ven tablas distintas.
+ */
+export const profileOf = (champion) => profileRow(champion);
 
 /** Clasificaciones derivadas de la tabla, sin agregar juicio nuevo. */
 const isHardFrontline = (p) => p && p.fl >= 3;

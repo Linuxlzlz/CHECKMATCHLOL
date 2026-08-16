@@ -98,12 +98,33 @@ export function recordMarket(gameId, p, note) {
   return true;
 }
 
-export function recordResult(gameId, winner) {
+export function recordResult(gameId, winner, source = 'manual') {
   const all = read();
   const e = all[gameId];
   if (!e || !e.prediction) return false;
   e.result = winner; // 'A' | 'B' | null
+  e.resultSource = winner ? source : null;
   e.resolvedAt = winner ? new Date().toISOString() : null;
+  write(all);
+  return true;
+}
+
+/**
+ * Carga el resultado que el sitio pudo resolver solo (frame final verificado
+ * contra el marcador de la serie).
+ *
+ * Solo rellena lo que está vacío: un resultado cargado a mano nunca se pisa. Sin
+ * esto el registro dependía de que el usuario volviera a cada mapa a marcar
+ * quién ganó, y un registro que nadie completa no calibra nada.
+ */
+export function autoResolve(gameId, winner) {
+  if (!winner) return false;
+  const all = read();
+  const e = all[gameId];
+  if (!e || !e.prediction || e.result) return false;
+  e.result = winner;
+  e.resultSource = 'auto';
+  e.resolvedAt = new Date().toISOString();
   write(all);
   return true;
 }
@@ -139,13 +160,45 @@ export function brier(entries) {
 
 /** Aciertos: correcto no es lo mismo que informativo, pero se reporta igual. */
 export function hitRate(entries) {
-  const scored = entries.filter((e) => e.result && e.prediction?.p != null);
+  // Un 50% exacto no elige lado: contarlo como acierto o como error sería
+  // inventar una predicción que el modelo no hizo.
+  const scored = entries.filter((e) => e.result && e.prediction?.p != null && e.prediction.p !== 0.5);
   if (!scored.length) return null;
   const hits = scored.filter((e) => {
     const pickedA = e.prediction.p > 0.5;
     return (pickedA && e.result === 'A') || (!pickedA && e.result === 'B');
   }).length;
   return { hits, n: scored.length, rate: hits / scored.length };
+}
+
+/**
+ * Comparación honesta contra el mercado.
+ *
+ * El Brier propio sobre TODAS las predicciones y el del mercado sobre las pocas
+ * que tienen precio no son comparables: son muestras distintas. Esto los calcula
+ * sobre el MISMO subconjunto — los mapas con resultado y con precio cargado — y
+ * devuelve los dos números juntos, que es la única forma de leer si el análisis
+ * propio aportó algo sobre el precio.
+ *
+ * La referencia del backtest del usuario es 0.2368 propio contra 0.2353 del
+ * mercado, con λ*=0.
+ */
+export function pairedBrier(entries) {
+  const usable = entries.filter(
+    (e) => e.result && e.prediction?.p != null && (e.market?.length ?? 0) > 0
+  );
+  if (!usable.length) return null;
+  let own = 0;
+  let mkt = 0;
+  for (const e of usable) {
+    const outcome = e.result === 'A' ? 1 : 0;
+    // La última observación es la más cercana al cierre, que es la que vale.
+    const close = e.market[e.market.length - 1].p;
+    own += (e.prediction.p - outcome) ** 2;
+    mkt += (close - outcome) ** 2;
+  }
+  const n = usable.length;
+  return { n, own: own / n, market: mkt / n, edge: mkt / n - own / n };
 }
 
 /**
@@ -178,11 +231,14 @@ export function summary() {
   return {
     total: entries.length,
     resolved: entries.filter((e) => e.result).length,
+    autoResolved: entries.filter((e) => e.resultSource === 'auto').length,
     withSnapshots: entries.filter((e) => Object.keys(e.snapshots ?? {}).length).length,
     withMarket: entries.filter((e) => (e.market?.length ?? 0) > 0).length,
     brierAll: brier(entries),
     brierPreGame: brier(preGame),
+    paired: pairedBrier(entries),
     hits: hitRate(entries),
+    hitsPreGame: hitRate(preGame),
     clv: closingLineValue(entries),
     entries: entries.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
   };
@@ -202,7 +258,7 @@ export function exportCSV() {
     'gameId', 'creado', 'liga', 'equipoA', 'equipoB', 'mapa', 'previa',
     'p_modelo', 'delta_indice', 'banda',
     'mercado_apertura', 'mercado_cierre',
-    'oro_min15', 'oro_min20', 'resultado',
+    'oro_min15', 'oro_min20', 'resultado', 'origen_resultado',
   ];
   const esc = (v) => {
     const s = v == null ? '' : String(v);
@@ -215,7 +271,7 @@ export function exportCSV() {
       e.prediction?.p?.toFixed(4), e.prediction?.tfDelta?.toFixed(2), e.prediction?.band,
       e.market?.[0]?.p?.toFixed(4), e.market?.[e.market.length - 1]?.p?.toFixed(4),
       e.snapshots?.['15']?.goldDiff, e.snapshots?.['20']?.goldDiff,
-      e.result ?? '',
+      e.result ?? '', e.resultSource ?? '',
     ].map(esc).join(',')
   );
   return [head.join(','), ...lines].join('\n');

@@ -169,6 +169,55 @@ Zoe,0,1,0,3,1,0,2
 Zyra,0,3,1,1,2,0,2
 Vladimir,1,3,0,1,1,1,3`;
 
+/**
+ * TABLA DE EXTENSIÓN — campeones que NO están en la tabla congelada.
+ *
+ * Data Dragon 16.16.1 tiene 173 campeones; la tabla congelada, 150. Los 23 que
+ * faltaban contaban como CERO en los cinco ejes, así que cualquier draft que los
+ * usara quedaba con el índice deprimido y el campeón sin diagnóstico.
+ *
+ * Estas filas son JUICIO PROPIO, no dato, exactamente igual que la tabla
+ * congelada. Se escribieron con el mismo criterio (0-3 por eje, anclando cada
+ * campeón contra filas comparables ya existentes) y ANTES de ver ningún
+ * resultado. Se guardan aparte por una razón que importa:
+ *
+ *   La distribución de referencia (las 62 comps que definen la escala) se
+ *   calcula SOLO con la tabla congelada. De los 23 que faltaban, únicamente
+ *   "Locke" aparece en reference_comps.csv, y no se agrega acá justamente para
+ *   que la escala no se mueva: las sd siguen siendo 3.00 / 1.91 / 1.68 / 1.38 /
+ *   1.34 y las bandas de 0.5 y 1.0 sd siguen significando lo mismo que en el
+ *   backtest (n=31, 74%).
+ *
+ * O sea: la extensión mejora la lectura del draft de hoy sin tocar la vara
+ * contra la que se lo mide. La asimetría es deliberada y está declarada.
+ *
+ * Los que siguen sin fila (Locke, Yunara, Zaahen) son campeones cuyo kit no
+ * conozco lo suficiente como para puntuarlo. Inventarles números sería peor que
+ * dejarlos afuera: el sitio los muestra en el panel de diagnóstico con un editor
+ * para que los puntúes vos, y esa clasificación queda guardada como "manual".
+ */
+export const EXTENSION_CSV = `champion,fl,aoe,eng,pick,poke,split,scale
+Akshan,0,0,0,3,1,2,1
+Brand,0,3,0,1,2,0,2
+Ekko,0,2,1,3,0,1,2
+Fiddlesticks,0,3,3,1,1,0,2
+Fizz,0,1,0,3,0,1,2
+Heimerdinger,0,2,0,0,3,1,2
+Kayle,0,1,0,0,1,3,3
+Kayn,1,1,2,3,0,2,2
+Master Yi,0,1,0,2,0,2,3
+Mel,0,3,0,2,2,0,2
+Nasus,2,1,0,1,0,3,3
+Quinn,0,0,0,2,1,3,1
+Rammus,3,2,3,1,0,0,1
+Shaco,0,1,0,3,0,2,1
+Singed,3,1,1,1,0,3,2
+Tahm Kench,3,0,1,2,0,1,1
+Talon,0,1,0,3,0,2,1
+Teemo,0,1,0,1,2,2,1
+Udyr,2,2,2,1,0,2,2
+Vel'Koz,0,3,0,1,3,0,2`;
+
 export const REFERENCE_CSV = `gameid,side,team,result,champions
 80183,Blue,EDG,0,Lee Sin|Cassiopeia|Ziggs|Gnar|Camille
 80183,Red,LGD,1,Syndra|Skarner|Ambessa|Kai'Sa|Rell

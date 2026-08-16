@@ -16,7 +16,9 @@ import {
 } from './engine/checkpoints.js';
 import * as ledger from './engine/ledger.js';
 import { diffChampions } from './engine/patchdiff.js';
-import { scoreDraft, isClassified } from './engine/index-score.js';
+import {
+  scoreDraft, classificationOf, setManualProfile, profileRow, AXES,
+} from './engine/index-score.js';
 import {
   structuralAxes, laneMatchups, concentrationAndWindow, NON_COMPUTABLE_AXES,
   MATCHUP_CHECKLIST, ROLE_LABEL,
@@ -25,7 +27,10 @@ import { readState, liveSignals, gameMinute, snapshotLabel } from './engine/live
 import { buildProbability, bettingStance, layerDisagreement } from './engine/probability.js';
 import {
   buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache, rosterCheck,
+  cachedIndices, aggregateIndices,
 } from './engine/meta.js';
+import { finalStateOf, resolveSeries, METHOD_LABEL } from './engine/outcome.js';
+import { collectDiagnostics } from './engine/diagnostics.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) =>
@@ -39,18 +44,83 @@ const state = {
   league: LEAGUES[0],
   tournament: null,
   events: [],
+  olderToken: null,
+  loadingMore: false,
+  search: '',
   liveIds: new Set(),
+  view: 'match',
   matchId: null,
   gameId: null,
   detail: null,
   standings: null,
+  standingsPromise: null,
   metaIndex: null,
   metaBuilding: false,
+  metaProgress: null,
+  autoIndexTried: new Set(),
+  globalIndex: null,
   rosters: null,
   patchDiff: null,
   patchDiffBusy: false,
-  timer: null,
+  seriesOutcome: null,
+  diagnostics: null,
 };
+
+/* ------------------------------------------------------------------ *
+ * ruta: la URL es el estado, para que recargar no pierda el partido
+ * ------------------------------------------------------------------ */
+
+const LAST_ROUTE_KEY = 'cml:route:v1';
+
+function routeHash() {
+  if (state.view === 'ledger') return '#/registro';
+  return '#/' + [state.league.key, state.matchId, state.gameId].filter(Boolean).join('/');
+}
+
+/** Escribe la ruta actual en la URL y la recuerda para la próxima visita. */
+function syncRoute({ push = false } = {}) {
+  const h = routeHash();
+  if (location.hash !== h) {
+    if (push) history.pushState(null, '', h);
+    else history.replaceState(null, '', h);
+  }
+  try { localStorage.setItem(LAST_ROUTE_KEY, h); } catch { /* modo privado */ }
+}
+
+function parseRoute(hash) {
+  const parts = (hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
+  if (!parts.length) return null;
+  if (parts[0] === 'registro') return { view: 'ledger' };
+  const league = LEAGUES.find((l) => l.key === parts[0]);
+  if (!league) return null;
+  return { view: 'match', league, matchId: parts[1] ?? null, gameId: parts[2] ?? null };
+}
+
+/**
+ * Aplica la ruta de la URL. Se usa al arrancar y en atrás/adelante del
+ * navegador, que es lo que hace que el sitio se sienta navegable en vez de una
+ * sola pantalla que se reinicia.
+ */
+async function applyRoute(r) {
+  if (!r) return;
+  if (r.view === 'ledger') {
+    state.view = 'ledger';
+    state.matchId = null;
+    renderMatchList();
+    renderLedger();
+    return;
+  }
+  state.view = 'match';
+  const leagueChanged = r.league.key !== state.league.key;
+  state.league = r.league;
+  if (leagueChanged) {
+    state.metaIndex = null;
+    renderLeagues();
+    await loadLeague(state.league, { keepMatch: true });
+  }
+  if (r.matchId) await openMatch(r.matchId, { gameId: r.gameId, fromRoute: true });
+  else $('#content').innerHTML = emptyState();
+}
 
 /* ------------------------------------------------------------------ *
  * arranque
@@ -59,16 +129,40 @@ const state = {
 async function init() {
   renderLeagues();
   $('#refresh').addEventListener('click', () => {
-    if (state.matchId) openMatch(state.matchId, { force: true });
+    if (state.view === 'ledger') renderLedger();
+    else if (state.matchId) openMatch(state.matchId, { force: true });
     else loadLeague(state.league);
   });
   $('#open-ledger').addEventListener('click', () => {
+    state.view = 'ledger';
     state.matchId = null;
+    syncRoute({ push: true });
     renderMatchList();
     renderLedger();
   });
+
+  window.addEventListener('popstate', () => applyRoute(parseRoute(location.hash)));
+  window.addEventListener('hashchange', () => {
+    const r = parseRoute(location.hash);
+    if (r && r.matchId !== state.matchId) applyRoute(r);
+  });
+
   await initDDragon();
-  await loadLeague(state.league);
+
+  // La ruta manda; si no hay, se recupera la última visitada.
+  let route = parseRoute(location.hash);
+  if (!route) {
+    try { route = parseRoute(localStorage.getItem(LAST_ROUTE_KEY)); } catch { route = null; }
+  }
+  if (route?.view === 'match') state.league = route.league;
+
+  state.globalIndex = aggregateIndices(cachedIndices());
+  await loadLeague(state.league, { keepMatch: !!route });
+  renderLeagues();
+
+  if (route) await applyRoute(route);
+  else syncRoute();
+
   pollLive();
   setInterval(pollLive, 20_000);
 }
@@ -80,10 +174,14 @@ function renderLeagues() {
   ).join('');
   $('#leagues').querySelectorAll('.league-btn').forEach((b) =>
     b.addEventListener('click', () => {
+      if (b.dataset.key === state.league.key) return;
       state.league = LEAGUES.find((l) => l.key === b.dataset.key);
+      state.view = 'match';
       state.matchId = null;
+      state.gameId = null;
       state.metaIndex = null;
       renderLeagues();
+      syncRoute({ push: true });
       loadLeague(state.league);
       $('#content').innerHTML = emptyState();
     })
@@ -101,10 +199,12 @@ const emptyState = () => `
  * liga y lista de partidos
  * ------------------------------------------------------------------ */
 
-async function loadLeague(league) {
+async function loadLeague(league, { keepMatch = false } = {}) {
   $('#league-title').textContent = league.name;
   $('#tournament-label').textContent = 'cargando…';
-  $('#match-list').innerHTML = `<div class="skeleton-list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
+  if (!keepMatch) {
+    $('#match-list').innerHTML = `<div class="skeleton-list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
+  }
 
   try {
     const [sched, tournament] = await Promise.all([
@@ -113,24 +213,56 @@ async function loadLeague(league) {
     ]);
     state.tournament = tournament;
     state.events = sched?.data?.schedule?.events ?? [];
+    state.olderToken = sched?.data?.schedule?.pages?.older ?? null;
     $('#tournament-label').textContent = tournament?.slug
       ? tournament.slug.replace(/_/g, ' ')
       : 'torneo no identificado';
 
+    // Los standings son el componente que más pesa en la probabilidad. Antes se
+    // pedían sin esperar, así que el primer render congelaba la predicción en el
+    // registro SIN calidad de equipos y esa entrada quedaba coja para siempre.
+    // Ahora la promesa se guarda y renderMatch la espera antes de calcular.
     state.standings = null;
-    if (tournament?.id) {
-      getStandings(tournament.id)
-        .then((s) => { state.standings = s; })
-        .catch(() => { state.standings = null; });
-    }
+    state.standingsPromise = tournament?.id
+      ? getStandings(tournament.id)
+          .then((s) => { state.standings = s; return s; })
+          .catch(() => { state.standings = null; return null; })
+      : Promise.resolve(null);
+
     renderMatchList();
+    autoIndex();
   } catch (e) {
     $('#match-list').innerHTML = `<div class="card-body"><div class="err">No se pudo cargar el calendario: ${esc(e.message)}</div></div>`;
   }
 }
 
+/** Trae una página más de calendario hacia atrás. */
+async function loadOlder() {
+  if (!state.olderToken || state.loadingMore) return;
+  state.loadingMore = true;
+  renderMatchList();
+  try {
+    const sched = await getSchedule(state.league.id, state.olderToken);
+    const evs = sched?.data?.schedule?.events ?? [];
+    const seen = new Set(state.events.map((e) => e.match?.id));
+    state.events = [...evs.filter((e) => e.match?.id && !seen.has(e.match.id)), ...state.events];
+    state.olderToken = sched?.data?.schedule?.pages?.older ?? null;
+  } catch { /* el botón vuelve a estar disponible */ } finally {
+    state.loadingMore = false;
+    renderMatchList();
+  }
+}
+
 function renderMatchList() {
-  const evs = state.events.filter((e) => e.match?.teams?.length === 2);
+  const q = state.search.trim().toLowerCase();
+  const matches = (e) =>
+    !q ||
+    (e.match?.teams ?? []).some(
+      (t) => (t.code ?? '').toLowerCase().includes(q) || (t.name ?? '').toLowerCase().includes(q)
+    ) ||
+    (e.blockName ?? '').toLowerCase().includes(q);
+
+  const evs = state.events.filter((e) => e.match?.teams?.length === 2).filter(matches);
   const live = [], upcoming = [], done = [];
   for (const e of evs) {
     if (e.state === 'inProgress' || state.liveIds.has(e.match.id)) live.push(e);
@@ -141,23 +273,42 @@ function renderMatchList() {
 
   const groups = [
     ['En vivo', live],
-    ['Próximos', upcoming.slice(0, 12)],
-    ['Terminados', done.slice(0, 25)],
+    ['Próximos', upcoming.slice(0, 15)],
+    ['Terminados', done],
   ].filter(([, arr]) => arr.length);
 
-  if (!groups.length) {
-    $('#match-list').innerHTML = `<div class="card-body"><p class="muted-xs">Sin partidos en el calendario de esta liga.</p></div>`;
-    return;
-  }
+  const head = `
+    <div class="list-tools">
+      <input id="match-search" class="search" type="search" placeholder="Filtrar por equipo…"
+             value="${esc(state.search)}" autocomplete="off">
+      <span class="muted-xs">${evs.length} partido${evs.length === 1 ? '' : 's'}</span>
+    </div>`;
 
-  $('#match-list').innerHTML = groups
-    .map(([label, arr]) => `
-      <div class="group-label">${label}</div>
-      ${arr.map((e) => matchItem(e, label === 'En vivo')).join('')}`)
-    .join('');
+  const body = groups.length
+    ? groups.map(([label, arr]) => `
+        <div class="group-label">${label}<span class="group-n">${arr.length}</span></div>
+        ${arr.map((e) => matchItem(e, label === 'En vivo')).join('')}`).join('')
+    : `<div class="card-body"><p class="muted-xs">Sin partidos que coincidan.</p></div>`;
 
+  const more = state.olderToken
+    ? `<button class="btn btn-sm btn-outline list-more" id="load-older" ${state.loadingMore ? 'disabled' : ''}>
+         ${state.loadingMore ? 'Cargando…' : 'Cargar partidos anteriores'}</button>`
+    : `<div class="muted-xs list-more">No hay más partidos hacia atrás en el calendario.</div>`;
+
+  $('#match-list').innerHTML = head + body + more;
+
+  const input = $('#match-search');
+  input?.addEventListener('input', () => {
+    state.search = input.value;
+    const pos = input.selectionStart;
+    renderMatchList();
+    const again = $('#match-search');
+    again.focus();
+    again.setSelectionRange(pos, pos);
+  });
+  $('#load-older')?.addEventListener('click', loadOlder);
   $('#match-list').querySelectorAll('.match-item').forEach((b) =>
-    b.addEventListener('click', () => openMatch(b.dataset.id))
+    b.addEventListener('click', () => openMatch(b.dataset.id, { push: true }))
   );
 }
 
@@ -183,11 +334,59 @@ function matchItem(e, isLive) {
     </button>`;
 }
 
+/**
+ * Reemplaza el informe conservando lo que el usuario tenía en pantalla.
+ *
+ * El partido en vivo se refresca solo cada 20 s, y hasta ahora ese refresco
+ * pisaba el scroll, las secciones que habías abierto y la cuota que estabas
+ * escribiendo. Un panel que se reinicia solo mientras lo leés es inservible
+ * justo cuando más sirve, que es con el mapa en curso.
+ */
+function setContent(html, { preserve = false } = {}) {
+  const el = $('#content');
+  if (!preserve) {
+    el.innerHTML = html;
+    return;
+  }
+  const scroll = window.scrollY;
+  const openState = new Map();
+  el.querySelectorAll('details[data-k]').forEach((d) => openState.set(d.dataset.k, d.open));
+  const values = new Map();
+  el.querySelectorAll('input[id]').forEach((i) => { if (i.value) values.set(i.id, i.value); });
+  const activeId = document.activeElement?.id ?? null;
+  const selStart = document.activeElement?.selectionStart ?? null;
+
+  el.innerHTML = html;
+
+  el.querySelectorAll('details[data-k]').forEach((d) => {
+    if (openState.has(d.dataset.k)) d.open = openState.get(d.dataset.k);
+  });
+  el.querySelectorAll('input[id]').forEach((i) => {
+    if (values.has(i.id)) i.value = values.get(i.id);
+  });
+  if (activeId) {
+    const again = document.getElementById(activeId);
+    if (again) {
+      // Sin preventScroll, devolver el foco arrastra la página hasta el input.
+      again.focus({ preventScroll: true });
+      if (selStart != null && again.setSelectionRange) {
+        try { again.setSelectionRange(selStart, selStart); } catch { /* type sin selección */ }
+      }
+    }
+  }
+  // Después del layout: si se restaura antes, el alto todavía no es el final y
+  // el navegador recorta la posición.
+  window.scrollTo(0, scroll);
+  requestAnimationFrame(() => window.scrollTo(0, scroll));
+}
+
 async function pollLive() {
   try {
     const data = await getLive();
     const evs = data?.data?.schedule?.events ?? [];
+    const before = [...state.liveIds].sort().join(',');
     state.liveIds = new Set(evs.filter((e) => e.match?.id).map((e) => e.match.id));
+    const changed = before !== [...state.liveIds].sort().join(',');
     const mine = evs.filter((e) => e.league?.id === state.league.id);
     const pill = $('#live-pill');
     if (evs.length) {
@@ -201,9 +400,12 @@ async function pollLive() {
       pill.className = 'pill pill-idle';
       pill.textContent = 'sin partidos en vivo';
     }
-    renderMatchList();
+    // No repintar la lista mientras se escribe en el filtro: perdería el foco.
+    if (changed && document.activeElement?.id !== 'match-search') renderMatchList();
     // Si el partido abierto está en vivo, refrescamos su estado.
-    if (state.matchId && state.liveIds.has(state.matchId)) openMatch(state.matchId, { quiet: true });
+    if (state.view === 'match' && state.matchId && state.liveIds.has(state.matchId)) {
+      openMatch(state.matchId, { quiet: true });
+    }
   } catch { /* el poll no debe romper la vista */ }
 }
 
@@ -211,16 +413,17 @@ async function pollLive() {
  * partido
  * ------------------------------------------------------------------ */
 
-async function openMatch(matchId, { quiet = false, force = false, gameId = null } = {}) {
+async function openMatch(matchId, { quiet = false, force = false, gameId = null, push = false, fromRoute = false } = {}) {
   const changed = state.matchId !== matchId;
+  state.view = 'match';
   state.matchId = matchId;
-  if (changed) { state.gameId = null; renderMatchList(); }
+  if (changed) { state.gameId = null; state.seriesOutcome = null; renderMatchList(); }
   if (gameId) state.gameId = gameId;
 
   const btn = $('#refresh');
   if (!quiet) btn.classList.add('spinning');
   if (!quiet && changed) {
-    $('#content').innerHTML = `<div class="card"><div class="card-body"><p class="muted">Cargando partido…</p></div></div>`;
+    setContent(`<div class="card"><div class="card-body"><p class="muted">Cargando partido…</p></div></div>`);
   }
 
   try {
@@ -235,15 +438,49 @@ async function openMatch(matchId, { quiet = false, force = false, gameId = null 
       const lastDone = [...games].reverse().find((g) => g.state === 'completed');
       state.gameId = (inProgress ?? lastDone ?? games[0])?.id ?? null;
     }
-    await renderMatch(ev, force);
+    if (!fromRoute) syncRoute({ push: push && changed });
+    else syncRoute();
+    await renderMatch(ev, force, { preserve: quiet });
   } catch (e) {
-    $('#content').innerHTML = `<div class="card"><div class="card-body"><div class="err">${esc(e.message)}</div></div></div>`;
+    setContent(`<div class="card"><div class="card-body"><div class="err">${esc(e.message)}</div></div></div>`);
   } finally {
     btn.classList.remove('spinning');
   }
 }
 
-async function renderMatch(ev, force) {
+/**
+ * Resuelve el ganador de cada mapa de ESTA serie leyendo el frame final de cada
+ * uno y verificándolo contra el marcador. Sirve para dos cosas: mostrar quién
+ * ganó cada mapa en las pestañas, y cerrar solo las entradas del registro.
+ */
+async function resolveOpenSeries(ev) {
+  const games = (ev.match?.games ?? []).filter((g) => g.state === 'completed');
+  if (!games.length) return null;
+  const cached = state.seriesOutcome;
+  if (cached && cached.matchId === ev.match.id && cached.count === games.length) return cached;
+
+  const teams = (ev.match.teams ?? []).map((t) => ({ id: t.id, code: t.code, wins: t.result?.gameWins ?? 0 }));
+  const rows = [];
+  for (const g of games) {
+    try {
+      const w = await getWindow(g.id, feedTimestamp(90), 300_000);
+      const meta = w?.gameMetadata;
+      rows.push({
+        gameId: g.id,
+        number: g.number,
+        blueTeamId: meta?.blueTeamMetadata?.esportsTeamId ?? g.teams?.find((t) => t.side === 'blue')?.id ?? null,
+        redTeamId: meta?.redTeamMetadata?.esportsTeamId ?? g.teams?.find((t) => t.side === 'red')?.id ?? null,
+        final: finalStateOf(w),
+      });
+    } catch { /* un mapa sin frame final no rompe la serie */ }
+  }
+  const res = resolveSeries(teams, rows);
+  const out = { matchId: ev.match.id, count: games.length, teams, ...res };
+  state.seriesOutcome = out;
+  return out;
+}
+
+async function renderMatch(ev, force, { preserve = false } = {}) {
   const games = ev.match?.games ?? [];
   const game = games.find((g) => g.id === state.gameId);
   const teams = ev.match?.teams ?? [];
@@ -254,13 +491,15 @@ async function renderMatch(ev, force) {
   try { win = await getWindow(state.gameId); } catch { win = null; }
 
   if (!win?.gameMetadata) {
-    $('#content').innerHTML =
+    setContent(
       matchHeader(ev, game, games) +
       `<div class="card"><div class="card-body">
          <p class="muted">El feed no devuelve datos para este mapa todavía.</p>
          <div class="note">Una respuesta vacía significa que <strong>el mapa no arrancó</strong>.
            No es un error: es un "todavía no". El draft aparece cuando empieza la partida.</div>
-       </div></div>`;
+       </div></div>`,
+      { preserve }
+    );
     bindGameTabs();
     return;
   }
@@ -341,6 +580,11 @@ async function renderMatch(ev, force) {
   const rosterA = rosterCheck(state.rosters, blue);
   const rosterB = rosterCheck(state.rosters, red);
 
+  // Ganador de cada mapa ya jugado de esta serie. Cierra solo las entradas del
+  // registro: un registro que depende de que vuelvas a marcar a mano quién ganó
+  // no se completa nunca, y sin resultados no hay calibración.
+  const outcome = await resolveOpenSeries(ev).catch(() => null);
+
   // --- análisis ---
   const score = scoreDraft(
     { team: blue.team, champions: blue.players.map((p) => p.champion) },
@@ -350,6 +594,9 @@ async function renderMatch(ev, force) {
   const lanes = laneMatchups(blue, red);
   const { edges, window: win7 } = concentrationAndWindow(blue, red, axes);
 
+  // El componente que más pesa. Se espera de verdad antes de calcular: si se
+  // colaba un render sin standings, la predicción quedaba congelada sin él.
+  if (state.standingsPromise) await state.standingsPromise.catch(() => null);
   const recA = findRecord(blue) ?? blue.record;
   const recB = findRecord(red) ?? red.record;
   const prob = buildProbability({
@@ -361,10 +608,14 @@ async function renderMatch(ev, force) {
   });
   const stance = bettingStance({ p: prob.p, marketP: null });
 
-  const chLayerA = state.metaIndex ? championLayer(state.metaIndex, blue.players.map((p) => p.champion)) : null;
-  const chLayerB = state.metaIndex ? championLayer(state.metaIndex, red.players.map((p) => p.champion)) : null;
-  const plLayerA = state.metaIndex ? playerLayer(state.metaIndex, blue.players) : null;
-  const plLayerB = state.metaIndex ? playerLayer(state.metaIndex, red.players) : null;
+  const shortPatch = meta.patchVersion ? meta.patchVersion.split('.').slice(0, 2).join('.') : null;
+  const rolesOf = (side) => Object.fromEntries(side.players.map((p) => [p.champion, p.role]));
+  const layerOpts = (side) => ({ roles: rolesOf(side), patch: shortPatch, global: state.globalIndex });
+
+  const chLayerA = state.metaIndex ? championLayer(state.metaIndex, blue.players.map((p) => p.champion), layerOpts(blue)) : null;
+  const chLayerB = state.metaIndex ? championLayer(state.metaIndex, red.players.map((p) => p.champion), layerOpts(red)) : null;
+  const plLayerA = state.metaIndex ? playerLayer(state.metaIndex, blue.players, { global: state.globalIndex }) : null;
+  const plLayerB = state.metaIndex ? playerLayer(state.metaIndex, red.players, { global: state.globalIndex }) : null;
 
   const disagreement = layerDisagreement([
     { name: 'Índice de composición', favors: Math.abs(score.tfDelta) >= 0.5 ? score.tfFavors : null },
@@ -395,8 +646,33 @@ async function renderMatch(ev, force) {
     });
   }
 
-  $('#content').innerHTML = [
-    matchHeader(ev, game, games),
+  // Cerrar la entrada sola si ya se sabe quién ganó este mapa.
+  const resolved = outcome?.byGame?.[state.gameId] ?? null;
+  if (resolved?.winnerTeamId) {
+    ledger.autoResolve(state.gameId, resolved.winnerTeamId === blue.teamId ? 'A' : 'B');
+  }
+  const entryNow = ledger.getEntry(state.gameId) ?? entry;
+
+  const diagnostics = collectDiagnostics({
+    score,
+    champions: [
+      ...blue.players.map((p) => ({ champion: p.champion, team: blue.team })),
+      ...red.players.map((p) => ({ champion: p.champion, team: red.team })),
+    ],
+    metaIndex: state.metaIndex,
+    champLayers: [...(chLayerA ?? []), ...(chLayerB ?? [])],
+    playerLayers: [...(plLayerA ?? []), ...(plLayerB ?? [])],
+    prob,
+    window: win7,
+    patchDiff: state.patchDiff,
+    entry: entryNow,
+  });
+  state.diagnostics = diagnostics;
+
+  setContent([
+    matchHeader(ev, game, games, outcome),
+    cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnostics, win7, resolved, entry: entryNow }),
+    cardDiagnostics(diagnostics),
     st ? cardLiveState(st, minute, game) : '',
     checkpoints.length ? cardCheckpoints(checkpoints, blue, red) : '',
     cardDraft(blue, red, lanes, rosterA, rosterB),
@@ -407,16 +683,17 @@ async function renderMatch(ev, force) {
     cardChampionLayer(chLayerA, chLayerB, blue, red),
     cardPlayerLayer(plLayerA, plLayerB, blue, red, chLayerA, chLayerB, rosterA, rosterB),
     cardPatch(meta.patchVersion, blue, red),
-    cardWindow(win7),
-    cardReading(score, prob, stance, blue, red, disagreement, entry),
+    cardWindow(win7, state.metaIndex),
+    cardReading(score, prob, stance, blue, red, disagreement, entryNow, resolved),
     st ? cardSignals(st, minute, dSignals) : cardSignalsPreview(),
     cardMatchupChecklist(),
-  ].join('');
+  ].join(''), { preserve });
 
   bindGameTabs();
   bindMetaButton();
   bindPatchDiff(blue, red, meta.patchVersion);
   bindMarketAndResult(blue, red);
+  bindDiagnostics([...blue.players, ...red.players]);
 }
 
 /** Para un mapa terminado pedimos un frame bien tardío para agarrar el estado final. */
@@ -462,13 +739,174 @@ function championLayerFavors(la, lb, blue, red) {
  * tarjetas
  * ------------------------------------------------------------------ */
 
-function matchHeader(ev, game, games) {
+/**
+ * Tarjeta plegable. Lo que es detalle profundo se puede cerrar; la espina
+ * dorsal del informe queda siempre visible. El `data-k` permite conservar qué
+ * secciones tenías abiertas cuando el refresco en vivo repinta.
+ */
+function collapsible(key, title, sub, body, { open = false } = {}) {
+  return `
+  <details class="card fold" data-k="${esc(key)}"${open ? ' open' : ''}>
+    <summary class="card-head">
+      <h3>${title}</h3>
+      <span class="muted-xs">${sub ?? ''}</span>
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <div class="card-body">${body}</div>
+  </details>`;
+}
+
+/**
+ * Resumen ejecutivo. Existe porque el informe completo son quince tarjetas y la
+ * pregunta que se hace primero siempre es la misma: quién va ganando, cuánto
+ * pesa el draft y qué tan confiable es lo que estoy leyendo.
+ */
+function cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnostics, win7, resolved, entry }) {
+  const p = prob.p;
+  const favored = p >= 0.5 ? blue : red;
+  const pShown = p >= 0.5 ? p : 1 - p;
+  const tier = score.tfBand.tier;
+  const tierClass = { strong: 'band-strong', weak: 'band-weak', coin: 'band-coin' }[tier];
+
+  const bloq = diagnostics.counts.bloqueante;
+  const confidence = bloq > 0 || !prob.hasQuality
+    ? { cls: 'warn', txt: `${Math.max(bloq, 1)} hueco${Math.max(bloq, 1) === 1 ? '' : 's'} sin resolver` }
+    : diagnostics.counts.parcial > 0
+      ? { cls: 'ok', txt: 'Completa, con reservas' }
+      : { cls: 'ok', txt: 'Lectura completa' };
+
+  const stateLine = resolved?.winnerTeamId
+    ? `Mapa terminado — ganó <strong>${esc(resolved.winnerTeamId === blue.teamId ? blue.team : red.team)}</strong>
+       <span class="muted-xs">(${esc(METHOD_LABEL[resolved.method] ?? 'resuelto')})</span>`
+    : st
+      ? `En curso, minuto ${minute?.toFixed(0) ?? '?'} · oro ${
+          (() => { const d = st.a.gold - st.b.gold;
+            return Math.abs(d) < 1000
+              ? 'parejo (menos de 1k)'
+              : `${(d >= 0 ? '+' : '') + d.toLocaleString('es')} para ${esc(d >= 0 ? blue.team : red.team)}`; })()}`
+      : game?.state === 'unstarted'
+        ? 'El mapa todavía no arrancó: esto es lectura de draft pura.'
+        : 'Sin estado en vivo.';
+
+  const edge = edges[0];
+
+  return `
+  <div class="card summary">
+    <div class="card-body">
+      <div class="summary-grid">
+        <div class="sum-cell">
+          <div class="sum-k">Probabilidad</div>
+          <div class="sum-v">${(pShown * 100).toFixed(0)}% <span class="sum-team">${esc(favored.team)}</span></div>
+          <div class="muted-xs">${prob.finished ? 'lectura previa, no predice lo ya jugado' : prob.hasQuality ? 'calidad + draft' + (st ? ' + estado' : '') : 'sin calidad de equipos'}</div>
+        </div>
+        <div class="sum-cell">
+          <div class="sum-k">Δ teamfight</div>
+          <div class="sum-v ${tierClass}">${score.tfDelta >= 0 ? '+' : ''}${score.tfDelta.toFixed(2)} sd</div>
+          <div class="muted-xs">banda ${esc(score.tfBand.label)} · ${tier === 'coin' ? 'no usar como señal' : `favorece a ${esc(score.tfFavors)}`}</div>
+        </div>
+        <div class="sum-cell">
+          <div class="sum-k">Dónde se decide</div>
+          <div class="sum-v small">${edge ? esc(edge.label) : 'Mapa parejo en estructura'}</div>
+          <div class="muted-xs">${edge ? `${esc(edge.side)}${edge.carrier ? ` · lo carga ${esc(championName(edge.carrier.champion))}` : ''}` : 'ningún eje concentra margen suficiente'}</div>
+        </div>
+        <div class="sum-cell">
+          <div class="sum-k">Confianza del dato</div>
+          <div class="sum-v small ${confidence.cls === 'ok' ? 'ok-txt' : 'warn-txt'}">${confidence.txt}</div>
+          <div class="muted-xs">${diagnostics.counts.parcial} parcial${diagnostics.counts.parcial === 1 ? '' : 'es'} · ${diagnostics.counts.declarado} límite${diagnostics.counts.declarado === 1 ? '' : 's'} declarado${diagnostics.counts.declarado === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+      <div class="summary-state">${stateLine}</div>
+      <div class="summary-foot">
+        <span class="stance-mini">NO BET</span>
+        <span class="muted-xs">Postura por defecto${entry?.market?.length ? '' : ' — sin precio cargado no hay edge que medir'}.
+          ${win7.declared ? `Ventana declarada ${win7.from}–${win7.to} min.` : 'Sin ventana declarable.'}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+const SEVERITY = {
+  bloqueante: { label: 'Bloqueante', cls: 'sev-block' },
+  parcial: { label: 'Parcial', cls: 'sev-partial' },
+  declarado: { label: 'Límite declarado', cls: 'sev-known' },
+};
+
+function cardDiagnostics(d) {
+  const rows = d.items.map((it) => `
+    <div class="diag ${SEVERITY[it.severity].cls}">
+      <div class="diag-head">
+        <span class="diag-tag">${SEVERITY[it.severity].label}</span>
+        <span class="diag-title">${esc(it.title)}</span>
+        ${it.action ? `<button class="btn btn-sm btn-outline diag-act" data-diag="${esc(it.action.id)}">${esc(it.action.label)}</button>` : ''}
+      </div>
+      <div class="diag-detail">${esc(it.detail)}</div>
+    </div>`).join('');
+
+  return collapsible(
+    'diagnostico',
+    'Diagnóstico',
+    `${d.counts.bloqueante} bloqueante${d.counts.bloqueante === 1 ? '' : 's'} · ${d.counts.parcial} parcial${d.counts.parcial === 1 ? '' : 'es'} · ${d.counts.declarado} declarado${d.counts.declarado === 1 ? '' : 's'}`,
+    `<div class="note">Todo lo que este análisis <strong>no</strong> puede sostener, junto y con nombre.
+       Un hueco repartido entre ocho tarjetas se lee como "acá no hay nada que ver", y no es lo mismo
+       que un dato ausente.</div>
+     ${rows}
+     <div class="index-foot">
+       <button class="btn btn-sm btn-outline" data-diag="abrir-editor">Clasificar campeones</button>
+       <button class="btn btn-sm btn-outline" data-diag="indexar-mas">Indexar otra liga</button>
+       <span class="muted-xs">Las dos acciones que más huecos cierran: puntuar lo que la tabla no
+         tiene, y sumar muestra de otro torneo cuando el n local no alcanza.</span>
+     </div>`,
+    { open: d.counts.bloqueante > 0 }
+  );
+}
+
+/** Editor de arquetipos: la salida para los campeones que no están en ninguna tabla. */
+function championEditor(champions) {
+  const rows = champions.map((c) => {
+    const src = classificationOf(c);
+    const prof = profileRow(c) ?? {};
+    const inputs = AXES.map((a) => `
+      <label class="ax-in"><span>${a}</span>
+        <input type="number" min="0" max="3" step="1" data-ax="${a}" data-champ="${esc(c)}"
+               value="${prof[a] ?? 0}"></label>`).join('');
+    return `
+      <div class="editor-row">
+        <div class="editor-champ">
+          ${championIcon(c) ? `<img src="${esc(championIcon(c))}" alt="" loading="lazy">` : ''}
+          <div>
+            <strong>${esc(championName(c))}</strong>
+            <div class="muted-xs">${src ? `origen: ${esc(src)}` : 'sin clasificar — cuenta cero en los cinco ejes'}</div>
+          </div>
+        </div>
+        <div class="editor-axes">${inputs}</div>
+        <div class="editor-btns">
+          <button class="btn btn-sm" data-save-champ="${esc(c)}">Guardar</button>
+          ${src === 'manual' ? `<button class="btn btn-sm btn-outline" data-reset-champ="${esc(c)}">Volver a la tabla</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="editor">
+      <div class="note">Escala 0-3 por eje, la misma que la tabla congelada:
+        <strong>fl</strong> frontline · <strong>aoe</strong> daño de área · <strong>eng</strong> inicio duro ·
+        <strong>pick</strong> amenaza de pick · <strong>poke</strong> asedio · <strong>split</strong> presión lateral ·
+        <strong>scale</strong> escalado. Lo que guardes queda marcado como <em>manual</em> en todas las
+        lecturas y se guarda solo en este navegador: no toca la escala de referencia.</div>
+      ${rows}
+    </div>`;
+}
+
+function matchHeader(ev, game, games, outcome = null) {
   const [t1, t2] = ev.match?.teams ?? [];
+  const codeOf = (teamId) => (ev.match?.teams ?? []).find((t) => t.id === teamId)?.code ?? null;
   const tabs = games.map((g) => {
     const label = `Mapa ${g.number}`;
-    const dis = g.state === 'unstarted' ? 'disabled' : '';
+    const dis = g.state === 'unstarted' || g.state === 'unneeded' ? 'disabled' : '';
     const dot = g.state === 'inProgress' ? ' ●' : '';
-    return `<button class="game-tab${g.id === state.gameId ? ' active' : ''}" data-game="${g.id}" ${dis}>${label}${dot}</button>`;
+    const w = outcome?.byGame?.[g.id]?.winnerTeamId;
+    const tag = w ? `<span class="tab-win">${esc(codeOf(w) ?? '')}</span>` : '';
+    return `<button class="game-tab${g.id === state.gameId ? ' active' : ''}" data-game="${g.id}" ${dis}>${label}${dot}${tag}</button>`;
   }).join('');
 
   return `
@@ -499,13 +937,28 @@ function matchHeader(ev, game, games) {
 
 function championCell(p, subLabel) {
   const icon = championIcon(p.champion);
-  const unk = isClassified(p.champion) ? '' : `<div class="unclassified">sin clasificar en la tabla</div>`;
+  const src = classificationOf(p.champion);
+  const prof = profileRow(p.champion);
+  // El perfil en crudo, para poder discutir el campeón y no solo la suma.
+  const axes = prof
+    ? `<div class="champ-axes" title="fl · aoe · eng · pick · poke · split · scale">${
+        AXES.map((a) => `<span class="ax${prof[a] >= 3 ? ' hi' : prof[a] === 0 ? ' zero' : ''}" title="${a}: ${prof[a]}">${prof[a]}</span>`).join('')
+      }</div>`
+    : '';
+  const tag = src === null
+    ? `<div class="unclassified">sin clasificar — cuenta cero en los cinco ejes</div>`
+    : src === 'manual'
+      ? `<div class="unclassified manual">clasificación manual tuya</div>`
+      : src === 'extension'
+        ? `<div class="unclassified ext">clasificado por extensión</div>`
+        : '';
   return `<div class="champ">
       ${icon ? `<img src="${esc(icon)}" alt="" loading="lazy">` : '<div class="champ-img-ph"></div>'}
       <div class="champ-txt">
         <div class="champ-name">${esc(championName(p.champion))}</div>
         <div class="champ-player">${esc(p.name)}${subLabel ? ` <span class="badge badge-warn">${esc(subLabel)}</span>` : ''}</div>
-        ${unk}
+        ${axes}
+        ${tag}
       </div>
     </div>`;
 }
@@ -657,17 +1110,16 @@ function cardPlayerDetail(merged, blue, red) {
 
   const anyDetails = [...merged.a, ...merged.b].some((p) => p.hasDetails);
 
-  return `
-  <div class="card">
-    <div class="card-head"><h3>Detalle por jugador</h3>
-      <span class="muted-xs">daño, participación en kills, visión e ítems</span></div>
-    <div class="card-body">
-      ${anyDetails ? '' : `<div class="note note-warn">El feed de detalle no devolvió datos para este
-        frame. Las columnas de daño, KP y wards quedan vacías: faltan, no son cero.</div>`}
-      ${side(merged.a, blue.team)}
-      ${side(merged.b, red.team)}
-    </div>
-  </div>`;
+  return collapsible(
+    'detalle-jugador',
+    'Detalle por jugador',
+    'daño, participación en kills, visión e ítems',
+    `${anyDetails ? '' : `<div class="note note-warn">El feed de detalle no devolvió datos para este
+       frame. Las columnas de daño, KP y wards quedan vacías: faltan, no son cero.</div>`}
+     ${side(merged.a, blue.team)}
+     ${side(merged.b, red.team)}`,
+    { open: true }
+  );
 }
 
 function cardIndex(score) {
@@ -766,58 +1218,98 @@ function cardConcentration(edges, axes, blue, red) {
 
 const fmt = (v) => (v === null || v === undefined ? '—' : typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v);
 
+/** Barra de winrate con su IC95 dibujado, para que el intervalo se vea. */
+function wrBar(ci) {
+  if (!ci) return '';
+  const pos = (v) => `${Math.max(0, Math.min(100, v * 100)).toFixed(1)}%`;
+  return `
+    <div class="wr-bar${ci.straddles ? ' straddles' : ''}" title="IC95 [${(ci.low * 100).toFixed(0)}, ${(ci.high * 100).toFixed(0)}]">
+      <span class="wr-ci" style="left:${pos(ci.low)};width:${pos(ci.high - ci.low)}"></span>
+      <span class="wr-mid"></span>
+      <span class="wr-dot" style="left:${pos(ci.p)}"></span>
+    </div>`;
+}
+
 function cardChampionLayer(la, lb, blue, red) {
   if (!la) {
+    const busy = state.metaBuilding;
     return `
     <div class="card">
-      <div class="card-head"><h3>Capa de campeón</h3></div>
+      <div class="card-head"><h3>Capa de campeón</h3><span class="muted-xs">paso 4</span></div>
       <div class="card-body">
-        <p class="muted">Requiere indexar el torneo. gol.gg no es accesible desde el navegador,
-          así que esta capa se reconstruye leyendo los drafts de los partidos ya jugados desde
-          el feed oficial.</p>
-        <div style="margin-top:12px"><button class="btn" id="build-meta">Indexar torneo</button></div>
-        <div id="meta-progress"></div>
+        <p class="muted">${busy
+          ? 'Indexando el torneo…'
+          : 'Requiere indexar el torneo. gol.gg no es accesible desde el navegador, así que esta capa se reconstruye leyendo los drafts de los partidos ya jugados desde el feed oficial.'}</p>
+        <div style="margin-top:12px"><button class="btn" id="build-meta" ${busy ? 'disabled' : ''}>
+          ${busy ? 'Indexando…' : 'Indexar torneo'}</button></div>
+        <div id="meta-progress">${state.metaProgress ? progressHTML(state.metaProgress) : ''}</div>
         <div class="note">Sin el índice, esta capa está <strong>ausente</strong>, no en cero.
           El análisis de arriba no la incluye.</div>
       </div>
     </div>`;
   }
 
-  const side = (l, s) => l.map((c) => `
+  const idx = state.metaIndex;
+  const row = (c) => {
+    const badge = c.admits ? 'badge-ok' : c.status === 'sin-datos' ? 'badge-warn' : 'badge-no';
+    const badgeTxt = c.admits ? 'admitido' : c.status === 'sin-datos' ? 'sin datos' : 'excluido';
+    const roleTxt = c.roleRow
+      ? `${ROLE_LABEL[c.role] ?? c.role}: ${c.roleRow.picks}p${c.roleWr ? ` · ${(c.roleWr.p * 100).toFixed(0)}% (n=${c.roleWr.n})` : ''}`
+      : null;
+    const patchTxt = c.patchRow
+      ? `parche ${c.patch}: ${c.patchRow.picks}p${c.patchWr ? ` · ${(c.patchWr.p * 100).toFixed(0)}%` : ' · sin winrate reportable'}`
+      : c.patch ? `sin picks en el parche ${c.patch}` : null;
+    return `
     <div class="layer-row">
-      <div>
-        <div><strong>${esc(championName(c.champion))}</strong>
-          <span class="badge ${c.admits ? 'badge-ok' : c.status === 'sin-datos' ? 'badge-warn' : 'badge-no'}">
-            ${c.admits ? 'admitido' : c.status === 'sin-datos' ? 'sin datos' : 'excluido'}</span></div>
+      <div class="layer-main">
+        <div>
+          ${championIcon(c.champion) ? `<img class="mini-champ" src="${esc(championIcon(c.champion))}" alt="" loading="lazy">` : ''}
+          <strong>${esc(championName(c.champion))}</strong>
+          <span class="badge ${badge}">${badgeTxt}</span>
+          ${c.presence != null ? `<span class="badge badge-blue">presencia ${(c.presence * 100).toFixed(0)}%</span>` : ''}
+        </div>
         <div class="layer-reason">${esc(c.reason)}</div>
+        ${c.ci ? wrBar(c.ci) : ''}
+        ${roleTxt || patchTxt ? `<div class="layer-split">${[roleTxt, patchTxt].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+        ${c.fallback ? `<div class="layer-split fallback">Respaldo fuera del torneo: ${c.fallback.picks} picks en
+          ${c.fallback.sources} torneo(s) indexado(s)${c.fallback.wr ? ` · ${(c.fallback.wr.p * 100).toFixed(0)}%
+          IC95 [${(c.fallback.wr.low * 100).toFixed(0)}, ${(c.fallback.wr.high * 100).toFixed(0)}]` : ''}.
+          Otra liga es otro meta: sirve para no quedarte a ciegas, no para reemplazar el dato del torneo.</div>` : ''}
       </div>
-      <div class="row-val">${c.picks} picks</div>
-    </div>`).join('');
+      <div class="row-val">${c.picks}<div class="muted-xs">picks</div></div>
+    </div>`;
+  };
 
-  return `
-  <div class="card">
-    <div class="card-head"><h3>Capa de campeón</h3>
-      <span class="muted-xs">solo winrates con 10+ picks</span></div>
-    <div class="card-body">
-      <div class="note">
-        Winrate calculado sobre <strong>${state.metaIndex.gamesAttributable} de ${state.metaIndex.gamesCounted}</strong>
-        mapas: la API expone el marcador de la serie, no el ganador de cada mapa, así que solo se
-        atribuye resultado en series barridas. Ese subconjunto está sesgado hacia series decisivas.
-        Los <strong>picks</strong> sí se cuentan sobre todos los mapas.
+  const methodTxt = Object.entries(idx.methods ?? {})
+    .map(([k, n]) => `${n} por ${k === 'barrida' ? 'barrida' : k === 'cierre' ? 'mapa de cierre' : 'estado final'}`)
+    .join(' · ');
+
+  const body = `
+      <div class="note note-ok">
+        Resultado atribuido en <strong>${idx.gamesAttributable} de ${idx.gamesCounted}</strong> mapas
+        ${methodTxt ? `(${esc(methodTxt)})` : ''}.
+        La API no expone el ganador de cada mapa: sale del estado final del mapa y se
+        <strong>verifica contra el marcador de la serie</strong> — ${idx.seriesVerified} de
+        ${idx.seriesTotal} series verificaron. Las que no verifican quedan con sus mapas ambiguos
+        sin atribuir en vez de forzarlos. Los <strong>picks</strong> se cuentan sobre todos los mapas.
       </div>
-      ${state.metaIndex.failures?.any ? `<div class="note note-warn">
-        Lectura incompleta: de ${state.metaIndex.gamesTotal ?? '?'} mapas del torneo se leyeron
-        ${state.metaIndex.gamesCounted}.
-        ${state.metaIndex.failures.games ? `${state.metaIndex.failures.games} fallaron al descargar. ` : ''}
-        ${state.metaIndex.failures.emptyDrafts ? `${state.metaIndex.failures.emptyDrafts} volvieron sin draft. ` : ''}
-        ${state.metaIndex.failures.matches ? `${state.metaIndex.failures.matches} series no se pudieron leer. ` : ''}
-        El n de abajo es menor de lo que debería y eso cambia los intervalos.
+      ${idx.failures?.any ? `<div class="note note-warn">
+        Lectura incompleta: de ${idx.gamesTotal ?? '?'} mapas del torneo se leyeron ${idx.gamesCounted}.
+        ${idx.failures.games ? `${idx.failures.games} fallaron al descargar. ` : ''}
+        ${idx.failures.emptyDrafts ? `${idx.failures.emptyDrafts} volvieron sin draft. ` : ''}
+        ${idx.failures.matches ? `${idx.failures.matches} series no se pudieron leer. ` : ''}
+        El n de abajo es menor de lo que debería y eso ensancha los intervalos.
       </div>` : ''}
-      <div style="margin-top:12px"><div class="muted-xs">${esc(blue.team)}</div>${side(la)}</div>
-      <div style="margin-top:14px"><div class="muted-xs">${esc(red.team)}</div>${side(lb)}</div>
-      <div style="margin-top:12px"><button class="btn btn-sm btn-outline" id="rebuild-meta">Reindexar</button></div>
-    </div>
-  </div>`;
+      <div style="margin-top:12px"><div class="side-label side-blue">${esc(blue.team)}</div>${la.map(row).join('')}</div>
+      <div style="margin-top:14px"><div class="side-label side-red">${esc(red.team)}</div>${lb.map(row).join('')}</div>
+      <div class="index-foot">
+        <button class="btn btn-sm btn-outline" id="rebuild-meta">Reindexar</button>
+        <span class="muted-xs">${esc(idx.tournamentSlug ?? '')} · ${idx.gamesCounted} mapas ·
+          construido ${esc(new Date(idx.builtAt).toLocaleString('es'))}
+          ${idx.duration ? ` · duración media ${idx.duration.mean.toFixed(1)} min` : ''}</span>
+      </div>`;
+
+  return collapsible('capa-campeon', 'Capa de campeón', 'solo winrates con 10+ picks', body, { open: true });
 }
 
 function cardPlayerLayer(pa, pb, blue, red, ca, cb, rosterA, rosterB) {
@@ -834,32 +1326,34 @@ function cardPlayerLayer(pa, pb, blue, red, ca, cb, rosterA, rosterB) {
 
   const side = (l, roster) => l.map((p) => `
     <div class="layer-row">
-      <div>
+      <div class="layer-main">
         <div><strong>${esc(p.name)}</strong> <span class="muted-xs">${esc(championName(p.champion))}</span>
           <span class="badge ${p.admits ? 'badge-ok' : p.status === 'observacion' ? 'badge-blue' : 'badge-no'}">
             ${p.admits ? 'entra' : p.status === 'observacion' ? 'observación' : 'sin datos'}</span>
           ${isSub(roster, p) ? '<span class="badge badge-warn">suplente</span>' : ''}</div>
         <div class="layer-reason">${esc(p.reason)}${isSub(roster, p)
           ? ' Está fuera del roster listado: sus pocas partidas se explican por eso, no por un pick raro.' : ''}</div>
+        ${p.ci ? wrBar(p.ci) : ''}
+        ${p.overall ? `<div class="layer-split">En el torneo: ${(p.overall.p * 100).toFixed(0)}%
+          sobre ${p.overall.n} mapas con resultado, IC95 [${(p.overall.low * 100).toFixed(0)}, ${(p.overall.high * 100).toFixed(0)}].
+          Es winrate de equipo mirado por jugador, no habilidad individual.</div>` : ''}
+        ${p.fallback ? `<div class="layer-split fallback">Respaldo fuera del torneo: ${p.fallback.games} partidas
+          con el campeón en los torneos indexados${p.fallback.wr ? ` · ${(p.fallback.wr.p * 100).toFixed(0)}%` : ''}.</div>` : ''}
       </div>
-      <div class="row-val">${p.champGames}/${p.seasonGames}</div>
+      <div class="row-val">${p.champGames}/${p.seasonGames}<div class="muted-xs">camp./torneo</div></div>
     </div>`).join('');
 
-  return `
-  <div class="card">
-    <div class="card-head"><h3>Capa de jugador</h3>
-      <span class="muted-xs">partidas con el campeón / totales en el torneo</span></div>
-    <div class="card-body">
-      <div style="margin-top:2px"><div class="muted-xs">${esc(blue.team)}</div>${side(pa, rosterA)}</div>
-      <div style="margin-top:14px"><div class="muted-xs">${esc(red.team)}</div>${side(pb, rosterB)}</div>
+  const body = `
+      <div style="margin-top:2px"><div class="side-label side-blue">${esc(blue.team)}</div>${side(pa, rosterA)}</div>
+      <div style="margin-top:14px"><div class="side-label side-red">${esc(red.team)}</div>${side(pb, rosterB)}</div>
       ${risks.map((r) => `<div class="note note-warn">${esc(r)}</div>`).join('')}
       <div class="note">
         El <strong>conteo de partidas</strong> es observación, no regla: acertó 5 veces seguidas y
         después falló en las dos direcciones el mismo día. El winrate solo entra con n≥10 y con el
         IC95 sin cruzar el 50%.
-      </div>
-    </div>
-  </div>`;
+      </div>`;
+
+  return collapsible('capa-jugador', 'Capa de jugador', 'partidas con el campeón / totales en el torneo', body, { open: true });
 }
 
 function cardPatch(patch, blue, red) {
@@ -923,14 +1417,30 @@ function cardPatch(patch, blue, red) {
   </div>`;
 }
 
-function cardWindow(w) {
+function cardWindow(w, index) {
+  const dur = index?.duration ?? null;
+  // Contexto real de la liga: una ventana de 25-31 significa algo distinto si el
+  // torneo promedia 28 minutos que si promedia 35.
+  const durNote = dur
+    ? `<div class="note">En este torneo la duración media es <strong>${dur.mean.toFixed(1)} min</strong>
+        (mitad de los mapas entre ${dur.p25.toFixed(0)} y ${dur.p75.toFixed(0)}, n=${dur.n}).
+        ${w.declared
+          ? w.from > dur.p75
+            ? 'La ventana declarada cae después del 75% de los mapas: en la mayoría de las partidas el punto de quiebre no llega a jugarse.'
+            : w.to < dur.p25
+              ? 'La ventana declarada termina antes de que la mayoría de los mapas se decidan.'
+              : 'La ventana declarada cae dentro del rango donde se decide la mayoría de los mapas.'
+          : 'Sirve igual como referencia para leer el reloj del mapa.'}</div>`
+    : '';
+
   if (!w.declared) {
     return `
     <div class="card">
-      <div class="card-head"><h3>Ventana</h3></div>
+      <div class="card-head"><h3>Ventana</h3><span class="muted-xs">punto de quiebre como rango</span></div>
       <div class="card-body">
         <p class="muted">Sin ventana declarada.</p>
         <div class="note note-warn">${esc(w.reason)}</div>
+        ${durNote}
       </div>
     </div>`;
   }
@@ -948,6 +1458,7 @@ function cardWindow(w) {
       <ul class="checklist">${w.claims.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
       <div class="note">El rango sale de la brecha de escalado de la tabla congelada. Es una
         heurística declarada, no una medición.</div>
+      ${durNote}
     </div>
   </div>`;
 }
@@ -982,12 +1493,17 @@ function marketBlock(blue, red, entry) {
       <span class="muted-xs">Resultado del mapa:</span>
       <button class="btn btn-sm btn-outline" data-result="A">Ganó ${esc(blue.team)}</button>
       <button class="btn btn-sm btn-outline" data-result="B">Ganó ${esc(red.team)}</button>
-      ${entry?.result ? `<span class="badge badge-ok">registrado: ${entry.result === 'A' ? esc(blue.team) : esc(red.team)}</span>` : ''}
+      ${entry?.result
+        ? `<span class="badge badge-ok">registrado: ${entry.result === 'A' ? esc(blue.team) : esc(red.team)}</span>
+           <span class="muted-xs">${entry.resultSource === 'auto'
+             ? 'resuelto solo desde el frame final, verificado contra el marcador de la serie'
+             : 'cargado a mano'}</span>`
+        : ''}
     </div>
   </div>`;
 }
 
-function cardReading(score, prob, stance, blue, red, dis, entry) {
+function cardReading(score, prob, stance, blue, red, dis, entry, resolved = null) {
   const pa = prob.p, pb = 1 - pa;
   const comps = prob.components.map((c) => `
     <div class="comp-row">
@@ -1109,13 +1625,38 @@ function cardSignalsPreview() {
 }
 
 function cardMatchupChecklist() {
-  return `
-  <div class="card">
-    <div class="card-head"><h3>Checklist de matchup</h3><span class="muted-xs">relaciones estables entre parches</span></div>
-    <div class="card-body">
-      <ul class="checklist">${MATCHUP_CHECKLIST.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
-    </div>
-  </div>`;
+  return collapsible(
+    'checklist',
+    'Checklist de matchup',
+    'relaciones estables entre parches',
+    `<ul class="checklist">${MATCHUP_CHECKLIST.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`
+  );
+}
+
+const progressHTML = (p) => `
+  <div class="muted-xs" style="margin-top:8px">${esc(p.label ?? '')} ${p.done ?? 0}/${p.total || '?'}</div>
+  <div class="progress"><i style="width:${p.total ? ((p.done / p.total) * 100).toFixed(1) : 0}%"></i></div>`;
+
+/**
+ * Indexa el torneo solo, sin esperar a que alguien apriete un botón.
+ *
+ * Las capas 4 y 5 estaban detrás de un click, así que en la práctica el análisis
+ * se leía casi siempre sin ellas y los pasos del método quedaban afuera. Si ya
+ * hay índice en caché se usa; si no, se construye en segundo plano y el informe
+ * se vuelve a armar cuando termina.
+ */
+async function autoIndex() {
+  const tid = state.tournament?.id ?? state.league.id;
+  if (state.metaBuilding || state.autoIndexTried.has(tid)) return;
+  state.autoIndexTried.add(tid);
+
+  const cached = cachedIndices().find((i) => i.tournamentId === tid);
+  if (cached) {
+    state.metaIndex = cached;
+    if (state.matchId && state.view === 'match') openMatch(state.matchId, { quiet: true });
+    return;
+  }
+  runMetaIndex(null);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1138,7 +1679,7 @@ function bindMetaButton() {
   if (rebuild) rebuild.addEventListener('click', () => {
     if (state.tournament?.id) clearIndexCache(state.tournament.id);
     state.metaIndex = null;
-    runMetaIndex(rebuild);
+    runMetaIndex(rebuild, { force: true });
   });
 }
 
@@ -1223,7 +1764,10 @@ function renderLedger() {
           ${e.market?.length ? ` · mercado ${(e.market[0].p * 100).toFixed(0)}%→${(e.market[e.market.length - 1].p * 100).toFixed(0)}%` : ''}
         </div>
       </div>
-      <button class="btn btn-sm btn-outline" data-del="${esc(e.gameId)}">borrar</button>
+      <div class="ledger-btns">
+        ${e.matchId ? `<button class="btn btn-sm btn-outline" data-open="${esc(e.matchId)}|${esc(e.gameId)}">abrir</button>` : ''}
+        <button class="btn btn-sm btn-outline" data-del="${esc(e.gameId)}">borrar</button>
+      </div>
     </div>`).join('');
 
   $('#content').innerHTML = `
@@ -1232,7 +1776,7 @@ function renderLedger() {
       <span class="muted-xs">la calibración solo se construye con predicciones escritas antes</span></div>
     <div class="card-body">
       <div class="live-grid">
-        ${metric('Registradas', s.total, `${s.resolved} con resultado`)}
+        ${metric('Registradas', s.total, `${s.resolved} con resultado${s.autoResolved ? ` · ${s.autoResolved} resueltas solas` : ''}`)}
         ${metric('Brier (todas)', s.brierAll ? s.brierAll.brier.toFixed(4) : '—',
           s.brierAll ? `n=${s.brierAll.n} · 0.25 = predecir 50% siempre` : 'hace falta cargar resultados')}
         ${metric('Brier (solo previas)', s.brierPreGame ? s.brierPreGame.brier.toFixed(4) : '—',
@@ -1242,6 +1786,25 @@ function renderLedger() {
         ${metric('Anticipó el movimiento', s.clv ? `${s.clv.anticipated}/${s.clv.n}` : '—',
           s.clv ? `${pct(s.clv.rate)} · proxy de CLV` : 'hace falta apertura y cierre de precio')}
       </div>
+
+      ${s.paired ? `
+        <div class="paired">
+          <div class="paired-head">Contra el mercado, sobre los mismos ${s.paired.n} mapas</div>
+          <div class="paired-bars">
+            <div class="paired-row"><span>Modelo</span>
+              <div class="pb"><i style="width:${Math.min(100, s.paired.own * 200)}%"></i></div>
+              <strong>${s.paired.own.toFixed(4)}</strong></div>
+            <div class="paired-row"><span>Mercado</span>
+              <div class="pb mkt"><i style="width:${Math.min(100, s.paired.market * 200)}%"></i></div>
+              <strong>${s.paired.market.toFixed(4)}</strong></div>
+          </div>
+          <div class="muted-xs">${s.paired.edge > 0
+            ? `El modelo va ${s.paired.edge.toFixed(4)} por debajo del mercado en Brier sobre este subconjunto. Con n=${s.paired.n} eso todavía no distingue nada: hace falta muchísima más muestra antes de tratarlo como edge.`
+            : `El mercado va ${(-s.paired.edge).toFixed(4)} por debajo. Es el resultado esperado y el motivo de la postura NO BET.`}</div>
+        </div>`
+        : `<div class="note note-warn">Todavía no hay ningún mapa con predicción, resultado y precio a la vez,
+             que es lo único que permite comparar contra el mercado. El Brier de arriba, solo, no dice
+             si el análisis aporta: hay que compararlo con el precio sobre los mismos partidos.</div>`}
 
       <div class="note">
         La referencia del backtest es <strong>Brier 0.2368 propio contra 0.2353 del mercado</strong>,
@@ -1272,6 +1835,13 @@ function renderLedger() {
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', () => { ledger.deleteEntry(b.dataset.del); renderLedger(); })
   );
+  document.querySelectorAll('[data-open]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const [matchId, gameId] = b.dataset.open.split('|');
+      state.view = 'match';
+      openMatch(matchId, { gameId, push: true });
+    })
+  );
 }
 
 function download(name, text, type) {
@@ -1284,29 +1854,162 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function runMetaIndex(btn) {
+/**
+ * Construye el índice del torneo. `btn` puede ser null: en ese caso corre en
+ * segundo plano y solo informa por la barra de la barra lateral.
+ */
+async function runMetaIndex(btn, { force = false } = {}) {
   if (state.metaBuilding) return;
   state.metaBuilding = true;
-  btn.disabled = true;
-  btn.textContent = 'Indexando…';
-  const box = document.getElementById('meta-progress')
-    ?? btn.parentElement.appendChild(Object.assign(document.createElement('div'), { id: 'meta-progress' }));
+  if (btn) { btn.disabled = true; btn.textContent = 'Indexando…'; }
+
+  const paint = (p) => {
+    state.metaProgress = p;
+    const box = document.getElementById('meta-progress');
+    if (box) box.innerHTML = progressHTML(p);
+    const pill = $('#index-pill');
+    if (pill) {
+      pill.hidden = false;
+      pill.textContent = `${p.label ?? 'Indexando'} ${p.done ?? 0}${p.total ? `/${p.total}` : ''}`;
+    }
+  };
 
   try {
     state.metaIndex = await buildTournamentIndex(state.league.id, state.tournament, {
-      onProgress: ({ label, done, total }) => {
-        const pct = total ? (done / total) * 100 : 0;
-        box.innerHTML = `<div class="muted-xs" style="margin-top:8px">${esc(label)} ${done}/${total || '?'}</div>
-                         <div class="progress"><i style="width:${pct}%"></i></div>`;
-      },
+      league: state.league,
+      force,
+      onProgress: paint,
     });
-    await openMatch(state.matchId, { force: true });
+    state.globalIndex = aggregateIndices(cachedIndices());
+    state.metaProgress = null;
+    const pill = $('#index-pill');
+    if (pill) pill.hidden = true;
+    if (state.matchId && state.view === 'match') await openMatch(state.matchId, { force: true });
   } catch (e) {
-    box.innerHTML = `<div class="err" style="margin-top:10px">No se pudo indexar: ${esc(e.message)}</div>`;
+    state.metaProgress = null;
+    const box = document.getElementById('meta-progress');
+    if (box) box.innerHTML = `<div class="err" style="margin-top:10px">No se pudo indexar: ${esc(e.message)}</div>`;
+    const pill = $('#index-pill');
+    if (pill) { pill.hidden = false; pill.textContent = 'falló el indexado'; }
   } finally {
     state.metaBuilding = false;
-    if (btn.isConnected) { btn.disabled = false; btn.textContent = 'Indexar torneo'; }
+    if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'Indexar torneo'; }
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * diagnóstico: cada hueco con su acción
+ * ------------------------------------------------------------------ */
+
+function bindDiagnostics(players) {
+  document.querySelectorAll('[data-diag]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const id = b.dataset.diag;
+      if (id === 'indexar' || id === 'reindexar') {
+        const target = document.getElementById('build-meta') ?? document.getElementById('rebuild-meta');
+        if (id === 'reindexar' && state.tournament?.id) clearIndexCache(state.tournament.id);
+        runMetaIndex(target, { force: id === 'reindexar' });
+        return;
+      }
+      if (id === 'indexar-mas') { openLeaguePicker(); return; }
+      if (id === 'abrir-editor') { openChampionEditor(players); return; }
+      if (id === 'comparar-parche') { document.getElementById('patch-diff')?.click(); return; }
+      if (id === 'cargar-precio') {
+        const input = document.getElementById('odds-a');
+        input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input?.focus();
+      }
+    })
+  );
+}
+
+/** Diálogo para puntuar campeones que no están en ninguna tabla. */
+function openChampionEditor(players) {
+  const champs = [...new Set(players.map((p) => p.champion))]
+    .filter((c) => classificationOf(c) !== 'congelado');
+  const list = champs.length ? champs : [...new Set(players.map((p) => p.champion))];
+  openModal('Clasificar campeones', championEditor(list));
+
+  document.querySelectorAll('[data-save-champ]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const champ = b.dataset.saveChamp;
+      const values = {};
+      document.querySelectorAll(`[data-champ="${CSS.escape(champ)}"]`).forEach((i) => {
+        values[i.dataset.ax] = i.value;
+      });
+      setManualProfile(champ, values);
+      closeModal();
+      openMatch(state.matchId, { force: true });
+    })
+  );
+  document.querySelectorAll('[data-reset-champ]').forEach((b) =>
+    b.addEventListener('click', () => {
+      setManualProfile(b.dataset.resetChamp, null);
+      closeModal();
+      openMatch(state.matchId, { force: true });
+    })
+  );
+}
+
+/** Indexar otra liga para que los campeones sin muestra local tengan respaldo. */
+function openLeaguePicker() {
+  const cached = new Set(cachedIndices().map((i) => i.leagueId));
+  const rows = LEAGUES.map((l) => `
+    <div class="editor-row">
+      <div><strong>${esc(l.name)}</strong> <span class="muted-xs">${esc(l.region)}</span>
+        <div class="muted-xs">${cached.has(l.id) ? 'ya indexada' : 'sin indexar'}</div></div>
+      <button class="btn btn-sm" data-index-league="${esc(l.key)}" ${l.key === state.league.key ? 'disabled' : ''}>
+        ${l.key === state.league.key ? 'liga actual' : 'Indexar'}</button>
+    </div>`).join('');
+
+  openModal(
+    'Indexar otra liga',
+    `<div class="note">Un campeón con 6 picks en esta liga puede tener 20 sumando otras ya indexadas.
+       Ese agregado aparece como <strong>respaldo etiquetado</strong>, nunca reemplazando el dato del
+       torneo: otra liga es otro meta, y el paso 4 pide el winrate <em>de este torneo</em>.</div>
+     ${rows}`
+  );
+
+  document.querySelectorAll('[data-index-league]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const league = LEAGUES.find((l) => l.key === b.dataset.indexLeague);
+      b.disabled = true;
+      b.textContent = 'Indexando…';
+      try {
+        const t = await getCurrentTournament(league.id).catch(() => null);
+        await buildTournamentIndex(league.id, t, {
+          league,
+          onProgress: (p) => { b.textContent = `${p.done ?? 0}${p.total ? `/${p.total}` : ''}`; },
+        });
+        state.globalIndex = aggregateIndices(cachedIndices());
+        b.textContent = 'listo';
+        if (state.matchId) openMatch(state.matchId, { force: true });
+      } catch (e) {
+        b.textContent = 'falló';
+        b.title = e.message;
+      }
+    })
+  );
+}
+
+function openModal(title, html) {
+  closeModal();
+  const el = document.createElement('div');
+  el.className = 'modal-back';
+  el.id = 'modal';
+  el.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><h3>${esc(title)}</h3>
+        <button class="btn-ghost" id="modal-close" aria-label="Cerrar">✕</button></div>
+      <div class="modal-body">${html}</div>
+    </div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', (e) => { if (e.target === el) closeModal(); });
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+}
+
+function closeModal() {
+  document.getElementById('modal')?.remove();
 }
 
 init();

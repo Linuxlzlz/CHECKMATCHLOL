@@ -150,6 +150,18 @@ export const getWindow = (gameId, startingTime, ttl) =>
     { ttl: ttl ?? (startingTime ? 8_000 : 300_000) }
   );
 
+/**
+ * Frame FINAL de un mapa terminado.
+ *
+ * Pedirle al feed un startingTime posterior al fin del mapa devuelve los últimos
+ * frames con `gameState: "finished"` — oro, torres e inhibidores finales — y
+ * además el gameMetadata completo con el draft. O sea que esta llamada trae todo
+ * lo que traía `getWindow(gameId)` MÁS el estado final, al mismo costo.
+ *
+ * Si el startingTime cae en el futuro el feed responde 400, por eso el atraso.
+ */
+export const getFinalWindow = (gameId, ttl) => getWindow(gameId, feedTimestamp(90), ttl ?? 3_600_000);
+
 /** Stats por jugador: ítems, runas, damage share, participación en kills, wards. */
 export const getDetails = (gameId, startingTime, ttl) =>
   getJSON(
