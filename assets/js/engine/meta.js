@@ -19,8 +19,10 @@ import { finalStateOf, resolveSeries } from './outcome.js';
 const CACHE_PREFIX = 'cml:meta:';
 const CACHE_KEY = (tid) => `${CACHE_PREFIX}${tid}`;
 const CACHE_TTL = 6 * 3600 * 1000;
-// v3 agrega `maps`: el corpus por mapa que necesita la validación.
-const INDEX_VERSION = 3;
+// v4 agrega fecha, equipos y roles por mapa: sin fecha no hay corte cronológico
+// y sin corte cronológico cualquier medición se evalúa sobre lo que ya vio.
+// v5 suma kills y torres finales, que ya estaban descargadas.
+const INDEX_VERSION = 5;
 
 /** Intervalo de Wilson al 95%. Se usa para el filtro "el IC no cruza el 50%". */
 export function wilson(wins, n) {
@@ -105,8 +107,13 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
   //    hace falta el feed para saber quién jugó de azul.
   const series = [];
   const games = [];
-  for (const ev of details) {
-    if (!ev?.match) continue;
+  // getEventDetails NO devuelve startTime ni match.id: solo el calendario los
+  // trae. `pool` conserva el orden, así que cada detalle se aparea con su evento.
+  details.forEach((ev, i) => {
+    if (!ev?.match) return;
+    const scheduled = matches[i];
+    const matchId = ev.id ?? scheduled?.match?.id ?? null;
+    const date = scheduled?.startTime ?? null;
     const teams = (ev.match.teams ?? []).map((t) => ({
       id: t.id,
       code: t.code,
@@ -123,10 +130,11 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
         redTeamId: g.teams?.find((t) => t.side === 'red')?.id ?? null,
         final: null,
       }));
-    if (!gs.length) continue;
-    series.push({ matchId: ev.match.id, teams, games: gs, startTime: ev.startTime });
+    if (!gs.length) return;
+    for (const g of gs) g.date = date;
+    series.push({ matchId, teams, games: gs, startTime: date });
     games.push(...gs);
-  }
+  });
 
   // 4. Un pedido por mapa al frame final: trae draft, parche Y estado final.
   onProgress({ phase: 'games', done: 0, total: games.length, label: 'Leyendo drafts y estado final…' });
@@ -229,19 +237,31 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
     const winner = winnerOf[g.gameId] ?? null;
     if (winner) gamesAttributable++;
 
-    const champsOf = (teamId) =>
-      d.players.filter((p) => p.teamId === teamId).map((p) => p.champion);
-    const blueChamps = champsOf(g.blueTeamId);
-    const redChamps = champsOf(g.redTeamId);
-    if (blueChamps.length === 5 && redChamps.length === 5) {
+    const sideOf = (teamId) => d.players.filter((p) => p.teamId === teamId);
+    const bluePlayers = sideOf(g.blueTeamId);
+    const redPlayers = sideOf(g.redTeamId);
+    if (bluePlayers.length === 5 && redPlayers.length === 5) {
       mapCorpus.push({
         gameId: g.gameId,
+        date: g.date ?? null,
         patch: d.patch ?? null,
-        blue: blueChamps,
-        red: redChamps,
+        blue: bluePlayers.map((p) => p.champion),
+        red: redPlayers.map((p) => p.champion),
+        // Rol y jugador por campeón: sin esto no se puede separar "este campeón
+        // gana" de "este campeón lo juega el equipo que gana".
+        blueRoles: bluePlayers.map((p) => p.role),
+        redRoles: redPlayers.map((p) => p.role),
+        bluePlayers: bluePlayers.map((p) => p.playerId ?? p.name),
+        redPlayers: redPlayers.map((p) => p.playerId ?? p.name),
+        blueTeamId: g.blueTeamId,
+        redTeamId: g.redTeamId,
         winner: winner ? (winner === g.blueTeamId ? 'blue' : 'red') : null,
         method: methodOf[g.gameId] ?? null,
         duration: durations[g.gameId] != null ? +durations[g.gameId].toFixed(1) : null,
+        // Estado final: ya se descargó para resolver el ganador, así que guardarlo
+        // es gratis y permite medir "en qué clase de partida gana este campeón".
+        kills: g.final ? g.final.blue.kills + g.final.red.kills : null,
+        towers: g.final ? g.final.blue.towers + g.final.red.towers : null,
       });
     }
     if (methodOf[g.gameId]) methods[methodOf[g.gameId]] = (methods[methodOf[g.gameId]] ?? 0) + 1;

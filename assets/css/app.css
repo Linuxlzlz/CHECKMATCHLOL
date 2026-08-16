@@ -576,3 +576,8 @@ code {
   color: var(--text-mute); text-transform: none; margin-top: 1px;
 }
 .axis-flag .th-src.medido { color: var(--accent); }
+
+/* --- tabla de descubrimiento ---------------------------------------- */
+.nar-table tr.best td { background: rgba(62,207,142,.07); }
+.nar-table tr.best td:first-child { box-shadow: inset 2px 0 0 var(--green); }
+.nar-table tr.worse td { opacity: .62; }

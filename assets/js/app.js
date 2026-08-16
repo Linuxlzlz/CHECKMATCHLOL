@@ -25,7 +25,10 @@ import {
   MATCHUP_CHECKLIST, ROLE_LABEL,
 } from './engine/structural.js';
 import { readState, liveSignals, gameMinute, snapshotLabel } from './engine/live.js';
-import { buildProbability, bettingStance, layerDisagreement } from './engine/probability.js';
+import { buildProbability, bettingStance, layerDisagreement, draftWeightFrom } from './engine/probability.js';
+import {
+  evaluate as evaluateModels, readEvaluation, championScaling, championFighting,
+} from './engine/discovery.js';
 import {
   buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache, rosterCheck,
   cachedIndices, aggregateIndices,
@@ -464,8 +467,11 @@ async function openMatch(matchId, { quiet = false, force = false, gameId = null,
 async function resolveOpenSeries(ev) {
   const games = (ev.match?.games ?? []).filter((g) => g.state === 'completed');
   if (!games.length) return null;
+  // getEventDetails no devuelve match.id: la clave de caché sale del id del
+  // evento. Con `undefined` la caché servía la serie de un partido en otro.
+  const matchKey = ev.id ?? state.matchId;
   const cached = state.seriesOutcome;
-  if (cached && cached.matchId === ev.match.id && cached.count === games.length) return cached;
+  if (cached && cached.matchId === matchKey && cached.count === games.length) return cached;
 
   const teams = (ev.match.teams ?? []).map((t) => ({ id: t.id, code: t.code, wins: t.result?.gameWins ?? 0 }));
   const rows = [];
@@ -483,7 +489,7 @@ async function resolveOpenSeries(ev) {
     } catch { /* un mapa sin frame final no rompe la serie */ }
   }
   const res = resolveSeries(teams, rows);
-  const out = { matchId: ev.match.id, count: games.length, teams, ...res };
+  const out = { matchId: matchKey, count: games.length, teams, ...res };
   state.seriesOutcome = out;
   return out;
 }
@@ -625,12 +631,29 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   if (state.standingsPromise) await state.standingsPromise.catch(() => null);
   const recA = findRecord(blue) ?? blue.record;
   const recB = findRecord(red) ?? red.record;
+  // Fuerza de equipo medida por mapa en el corpus. Es lo único que le ganó a la
+  // línea base fuera de muestra, así que entra al número.
+  const teamRow = (id) => {
+    for (const idx of cachedIndices()) {
+      const t = idx.teams?.[id];
+      if (t?.attributed >= 5) return { wr: t.wins / t.attributed, games: t.attributed };
+    }
+    return null;
+  };
+  const ctA = teamRow(blue.teamId);
+  const ctB = teamRow(red.teamId);
+  const corpusTeam = ctA && ctB
+    ? { a: ctA.wr, b: ctB.wr, gamesA: ctA.games, gamesB: ctB.games }
+    : null;
+
   const prob = buildProbability({
     recordA: recA, recordB: recB,
     tfDelta: score.tfDelta,
     goldDiff: st ? st.a.gold - st.b.gold : null,
     minute,
     finished: game?.state === 'completed',
+    corpusTeam,
+    draftWeight: draftWeightFrom(validation),
   });
   const stance = bettingStance({ p: prob.p, marketP: null });
 
@@ -711,6 +734,7 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     cardConcentration(edges, axes, blue, red),
     cardRiot(rAxes, cross, blue, red, riotMap),
     cardValidation(validation),
+    cardDiscovery(state.metaIndex ? cachedDiscovery() : null),
     roleGold ? cardRoleGold(roleGold, goldConc, edges, blue, red, minute) : '',
     merged ? cardPlayerDetail(merged, blue, red) : '',
     cardChampionLayer(chLayerA, chLayerB, blue, red),
@@ -762,6 +786,29 @@ function cachedValidation() {
   const v = all.length > 1 ? validateAcross(all) : validateIndex(state.metaIndex);
   const value = { ...v, read: readValidation(v) };
   validationCache = { key, value };
+  return value;
+}
+
+/**
+ * Descubrimiento: entrena candidatos con la parte vieja del corpus y los evalúa
+ * con la nueva. Se memoiza igual que la validación porque puntúa cientos de
+ * mapas y el partido en vivo se repinta cada 20 s.
+ */
+let discoveryCache = null;
+function cachedDiscovery() {
+  const all = cachedIndices();
+  const key = all.map((i) => `${i.tournamentId}:${i.builtAt}`).sort().join('|');
+  if (discoveryCache?.key === key) return discoveryCache.value;
+  const maps = all.flatMap((i) => i.maps ?? []);
+  if (maps.length < 40) return null;
+  const ev = evaluateModels(maps);
+  const value = {
+    eval: ev,
+    read: readEvaluation(ev),
+    scaling: championScaling(maps),
+    fighting: championFighting(maps),
+  };
+  discoveryCache = { key, value };
   return value;
 }
 
@@ -1471,6 +1518,88 @@ function cardSiege(s) {
         tienden a apuntar al mismo lado por construcción. Los únicos mapas que discriminan entre
         "el teamfight es mejor" y "el poke está flojo" son aquellos donde se contradicen.</div>
     </div>`;
+}
+
+/**
+ * Qué predice de verdad. Compara candidatos fuera de muestra, con corte
+ * cronológico, contra la línea base correcta: el lado azul.
+ */
+function cardDiscovery(disc) {
+  if (!disc) return '';
+  if (!disc.eval.usable) {
+    return collapsible('descubrimiento', 'Qué predice de verdad', 'requiere más corpus',
+      `<div class="note note-warn">${esc(disc.eval.reason)}</div>`);
+  }
+  const ev = disc.eval;
+  const best = ev.rows[0];
+  const rows = ev.rows.map((r) => `
+    <tr class="${r.id === best.id ? 'best' : ''}${r.beatsBase === false && r.id !== 'side' ? ' worse' : ''}">
+      <td><strong>${esc(r.label)}</strong><div class="muted-xs">${esc(r.detail)}</div></td>
+      <td class="num">${r.brier.toFixed(4)}</td>
+      <td class="num">${r.id === 'side' ? '—' : `${r.vsBase >= 0 ? '+' : ''}${r.vsBase.toFixed(4)}`}</td>
+      <td class="num">${(r.acc * 100).toFixed(0)}%<div class="muted-xs">[${(r.accLow * 100).toFixed(0)},${(r.accHigh * 100).toFixed(0)}]</div></td>
+    </tr>`).join('');
+
+  const splitCard = (s) => {
+    if (!s?.usable) return '';
+    const surv = s.rows.filter((r) => r.survivesFDR);
+    const top = surv.length ? surv : s.rows.slice(0, 4).concat(s.rows.slice(-4));
+    return `
+      <div class="muted-xs" style="margin:16px 0 6px"><strong>${esc(s.label)}</strong> —
+        ${esc(s.highLabel)} contra ${esc(s.lowLabel)}, corte en ${s.median.toFixed(1)}.
+        ${s.tested} campeones con muestra suficiente de los ${s.n} mapas.</div>
+      <div class="table-scroll">
+        <table class="detail-table nar-table">
+          <thead><tr><th>Campeón</th><th>${esc(s.highLabel)}</th><th>${esc(s.lowLabel)}</th><th>Δ (IC95)</th></tr></thead>
+          <tbody>${top.map((r) => `
+            <tr class="${r.survivesFDR ? 'best' : ''}">
+              <td><strong>${esc(championName(r.name))}</strong><div class="muted-xs">n=${r.total}</div></td>
+              <td class="num">${(r.highWr * 100).toFixed(0)}%<div class="muted-xs">n=${r.high.g}</div></td>
+              <td class="num">${(r.lowWr * 100).toFixed(0)}%<div class="muted-xs">n=${r.low.g}</div></td>
+              <td class="num">${r.diff >= 0 ? '+' : ''}${(r.diff * 100).toFixed(0)}
+                <div class="muted-xs">[${(r.lo * 100).toFixed(0)}, ${(r.hi * 100).toFixed(0)}]</div></td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <div class="note ${surv.length ? 'note-ok' : 'note-warn'}">
+        ${surv.length
+          ? `${surv.length} campeón${surv.length === 1 ? '' : 'es'} sobrevive${surv.length === 1 ? '' : 'n'} a la corrección por comparaciones múltiples (Benjamini-Hochberg, q=${s.fdr.q}).`
+          : `<strong>Ninguno sobrevive a la corrección por comparaciones múltiples.</strong>
+             Sin corregir habría ${s.naive} "hallazgos", y probar ${s.tested} campeones al 95%
+             produce ${s.expectedFalse.toFixed(1)} por puro azar. O sea que los que cruzan el umbral
+             son indistinguibles de ruido, y quedarse con ellos sería justo el error que este método
+             existe para evitar: tomar cinco observaciones consistentes y convertirlas en una regla.`}
+      </div>`;
+  };
+
+  return collapsible(
+    'descubrimiento',
+    'Qué predice de verdad',
+    `${ev.nTrain} mapas de entrenamiento · ${ev.nTest} de evaluación`,
+    `<div class="note ${disc.read.verdict === 'hay señal' ? 'note-ok' : 'note-warn'}">
+       <strong>${esc(disc.read.verdict)}.</strong> ${esc(disc.read.text)}</div>
+
+     <div class="muted-xs" style="margin:14px 0 6px">
+       Corte cronológico: se entrena con lo de <strong>${esc((ev.trainFrom ?? '').slice(0, 10))} a
+       ${esc((ev.trainTo ?? '').slice(0, 10))}</strong> y se evalúa con
+       <strong>${esc((ev.testFrom ?? '').slice(0, 10))} a ${esc((ev.testTo ?? '').slice(0, 10))}</strong>.
+       Un corte aleatorio dejaría partidas del mismo día de los dos lados y filtraría información del
+       futuro. La línea base no es 50%: es predecir siempre al lado azul, que gana
+       ${(ev.sideRate * 100).toFixed(0)}% en el corpus.
+     </div>
+     <div class="table-scroll">
+       <table class="detail-table nar-table">
+         <thead><tr><th>Modelo</th><th>Brier</th><th>vs base</th><th>Acierto</th></tr></thead>
+         <tbody>${rows}</tbody>
+       </table>
+     </div>
+     <div class="note">Brier más bajo es mejor. Todo lo de esta tabla es <strong>fuera de muestra</strong>:
+       ninguna fila vio los ${ev.nTest} mapas con los que se la evalúa.</div>
+
+     ${splitCard(disc.scaling)}
+     ${splitCard(disc.fighting)}`,
+    { open: true }
+  );
 }
 
 /** El sitio corriendo su propio test sobre el corpus que indexó. */

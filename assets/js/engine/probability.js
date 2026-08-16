@@ -24,7 +24,46 @@ export const WEIGHTS = {
   teamQuality: 2.2,   // sobre (winrate_a - winrate_b), rango [-1, 1]
   draft: 0.30,        // por sd de Δ teamfight, solo si |Δ| > 0.5
   goldPerK: 0.55,     // por cada 1000 de oro de diferencia, escalado por minuto
+  corpusTeam: 2.2,    // sobre la diferencia de winrate medida en el corpus
 };
+
+/**
+ * Peso del draft, decidido por la medición y no por juicio.
+ *
+ * Sobre 411 mapas de las 6 ligas, la banda grande del índice acierta 51%
+ * [44, 58] y el componente de draft EMPEORA el Brier fuera de muestra. Mientras
+ * el corpus diga eso, este componente entra en cero: mantenerlo en 0.30 sería
+ * saber que resta y usarlo igual.
+ *
+ * No está clavado en cero: si un corpus futuro muestra que el índice separa
+ * ganadores, el peso vuelve solo. La regla es "el peso lo fija la última
+ * medición", no "el draft no sirve".
+ */
+export function draftWeightFrom(validation) {
+  if (!validation?.usable) {
+    return { weight: WEIGHTS.draft, reason: 'Sin corpus indexado: se usa el peso por defecto, que nunca fue validado fuera de muestra.', measured: false };
+  }
+  const strong = validation.byBand?.strong;
+  if (!strong || strong.n < 60) {
+    return { weight: WEIGHTS.draft, reason: `Solo ${strong?.n ?? 0} mapas de banda grande en el corpus: no alcanza para cambiar el peso.`, measured: false };
+  }
+  if (strong.straddles) {
+    return {
+      weight: 0,
+      measured: true,
+      reason:
+        `En ${strong.n} mapas del corpus la banda grande acierta ${(strong.p * 100).toFixed(0)}% ` +
+        `(IC95 [${(strong.low * 100).toFixed(0)}, ${(strong.high * 100).toFixed(0)}], cruza el 50%). ` +
+        `El componente entra en CERO: usarlo sabiendo que no separa ganadores sería agregar ruido ` +
+        `con cara de análisis. Vuelve solo si el corpus cambia de opinión.`,
+    };
+  }
+  return {
+    weight: WEIGHTS.draft,
+    measured: true,
+    reason: `La banda grande acierta ${(strong.p * 100).toFixed(0)}% en ${strong.n} mapas del corpus, sin cruzar el 50%: el peso por defecto se sostiene.`,
+  };
+}
 
 /**
  * Topes. Una ventaja de 16k al minuto 30 es abrumadora, pero este modelo es
@@ -41,7 +80,10 @@ export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
  * @param {number|null} input.goldDiff  oro A - oro B (null si no arrancó)
  * @param {number|null} input.minute
  */
-export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute, finished = false }) {
+export function buildProbability({
+  recordA, recordB, tfDelta, goldDiff, minute, finished = false,
+  corpusTeam = null, draftWeight = null,
+}) {
   const components = [];
   let x = logit(0.5); // 0
 
@@ -73,17 +115,56 @@ export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute, 
     });
   }
 
-  // 2. Draft. Solo entra por encima de la banda de moneda al aire.
+  // 1b. Fuerza de equipo MEDIDA en el corpus indexado.
+  //
+  // Es el único componente que le gana a la línea base fuera de muestra: Brier
+  // 0.2281 contra 0.2400 de "predecir siempre al lado azul", sobre 124 mapas que
+  // el modelo no vio al entrenarse. Entra aparte de los standings porque mide
+  // otra cosa — winrate por MAPA en el corpus, no por serie en la tabla — y
+  // porque existe aunque el torneo no publique standings.
+  if (corpusTeam && corpusTeam.a != null && corpusTeam.b != null) {
+    const n = (corpusTeam.gamesA ?? 0) + (corpusTeam.gamesB ?? 0);
+    const shrink = n / (n + 20);
+    // Si los standings ya entraron, este componente pesa la mitad: los dos miden
+    // calidad de equipo y sumarlos enteros contaría lo mismo dos veces.
+    const share = wa !== null && wb !== null ? 0.5 : 1;
+    const contrib = WEIGHTS.corpusTeam * (corpusTeam.a - corpusTeam.b) * shrink * share;
+    x += contrib;
+    components.push({
+      id: 'corpus-team',
+      label: 'Fuerza de equipo (corpus indexado)',
+      detail:
+        `${(corpusTeam.a * 100).toFixed(0)}% contra ${(corpusTeam.b * 100).toFixed(0)}% por mapa · ` +
+        `n=${n} mapas · encogido ×${shrink.toFixed(2)}${share < 1 ? ' · a mitad de peso por solaparse con los standings' : ''}`,
+      contrib,
+      note:
+        'Único componente que le gana a la línea base fuera de muestra (Brier 0.2281 contra 0.2400 ' +
+        'en 124 mapas no vistos). Ver la tarjeta de validación.',
+    });
+  }
+
+  // 2. Draft. Solo entra por encima de la banda de moneda al aire, y con el peso
+  //    que diga la última medición.
+  const dw = draftWeight ?? { weight: WEIGHTS.draft, reason: null, measured: false };
   if (tfDelta !== null && tfDelta !== undefined) {
-    if (Math.abs(tfDelta) >= 0.5) {
-      const contrib = WEIGHTS.draft * tfDelta;
+    if (Math.abs(tfDelta) >= 0.5 && dw.weight > 0) {
+      const contrib = dw.weight * tfDelta;
       x += contrib;
       components.push({
         id: 'draft',
         label: 'Draft (índice de teamfight)',
-        detail: `Δ ${tfDelta >= 0 ? '+' : ''}${tfDelta.toFixed(2)} sd`,
+        detail: `Δ ${tfDelta >= 0 ? '+' : ''}${tfDelta.toFixed(2)} sd · peso ${dw.weight.toFixed(2)}`,
         contrib,
-        note: 'Aporta pocos puntos a propósito: la banda grande es 74%, falla una de cada cuatro.',
+        note: dw.reason ?? 'Aporta pocos puntos a propósito: la banda grande falla una de cada cuatro.',
+      });
+    } else if (Math.abs(tfDelta) >= 0.5 && dw.weight === 0) {
+      components.push({
+        id: 'draft',
+        label: 'Draft (índice de teamfight)',
+        detail: `Δ ${tfDelta >= 0 ? '+' : ''}${tfDelta.toFixed(2)} sd · peso 0 por medición`,
+        contrib: 0,
+        excluded: true,
+        note: dw.reason,
       });
     } else {
       components.push({
@@ -141,7 +222,9 @@ export function buildProbability({ recordA, recordB, tfDelta, goldDiff, minute, 
     finished: !!finished,
     components,
     logOdds: x,
-    hasQuality: wa !== null && wb !== null,
+    hasQuality: (wa !== null && wb !== null) || !!(corpusTeam?.a != null && corpusTeam?.b != null),
+    hasStandings: wa !== null && wb !== null,
+    draftWeight: dw,
   };
 }
 

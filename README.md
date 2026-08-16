@@ -22,6 +22,7 @@ a lo más interpretativo:
 | Concentración | Las una o dos posiciones donde se concentra el margen estructural |
 | Segunda fuente | Ejes que publica Riot por campeón, y contraste contra la tabla propia |
 | Validación | El sitio corriendo su propio test sobre el corpus que indexó |
+| Qué predice de verdad | Modelos comparados fuera de muestra contra la línea base |
 | Oro por rol | Dónde se concentró el oro de verdad, contrastado contra lo que predijo el draft |
 | Detalle por jugador | Daño, participación en kills, visión e ítems |
 | Capa de campeón | Winrate por torneo, solo con 10+ picks |
@@ -54,6 +55,7 @@ assets/js/
   engine/outcome.js       ganador por mapa desde el frame final, verificado contra la serie
   engine/riot-profile.js  segunda fuente: ejes de campeón publicados por Riot
   engine/validation.js    el test del índice corrido sobre el corpus indexado
+  engine/discovery.js     qué predice de verdad: modelos evaluados fuera de muestra
   engine/diagnostics.js   qué quedó sin diagnosticar y por qué
   engine/checkpoints.js   estado en minutos exactos, oro por rol, señales de detalle
   engine/live.js          señales de verificación en vivo
@@ -172,6 +174,66 @@ Qué significa y qué no:
   LoL profesional. Eso no valida el índice: valida que el ganador inferido por mapa no está sesgado
   hacia un lado. Si ese número se fuera de rango, toda la validación quedaría en duda y el panel lo
   marca como bloqueante.
+
+### Qué predice de verdad
+
+Sabiendo que el índice no reproduce, la pregunta siguiente es qué sí. El módulo de descubrimiento
+entrena candidatos con la parte **vieja** del corpus y los evalúa con la **nueva**, cronológicamente.
+El corte no es aleatorio a propósito: un corte al azar deja partidas del mismo día de los dos lados
+y filtra información del futuro, y el uso real es predecir mañana con lo de hasta hoy.
+
+La línea base tampoco es 50%: es **predecir siempre al lado azul**, que es una vara mucho más
+honesta y más difícil de superar.
+
+Sobre 287 mapas de entrenamiento y **124 de evaluación que ningún modelo vio**:
+
+| Modelo | Brier | vs base | Acierto |
+|---|---|---|---|
+| **Fuerza de equipo** | **0.2281** | +0.0119 | 66% [57, 74] |
+| Equipo + individual | 0.2292 | +0.0108 | 62% |
+| Rendimiento individual | 0.2307 | +0.0093 | 62% |
+| Equipo + campeón neto | 0.2313 | +0.0087 | 64% |
+| Solo el lado *(base)* | 0.2400 | — | 65% |
+| Winrate de campeón | 0.2431 | **−0.0031** | 57% |
+| Campeón neto de equipo | 0.2465 | **−0.0065** | 55% |
+
+Tres respuestas, y ninguna es la que uno querría:
+
+- **La fuerza del equipo es lo único que le gana a la base.** Confirma lo que el método venía
+  diciendo por otro camino: la calidad de los equipos es casi todo el margen.
+- **El rendimiento individual funciona, pero no aporta *sobre* el equipo.** "Equipo + individual"
+  (0.2292) es peor que equipo solo (0.2281). El winrate por jugador es un proxy más ruidoso de lo
+  mismo, no una señal nueva. Con este n, al menos.
+- **Las señales a nivel campeón empeoran la predicción.** Las dos filas que quedan por debajo de la
+  base son las de campeón. No es que los campeones no importen: es que con 421 mapas el winrate por
+  campeón es mayormente ruido, y meterlo al modelo mete el ruido.
+
+Ese hallazgo cambió el modelo: **el peso del componente de draft ahora lo fija la medición.** Si la
+banda grande cruza el 50% con n≥60, entra en cero, y el desglose de la Lectura lo dice con el número
+que lo justifica. No está clavado: vuelve solo si un corpus futuro muestra que el índice separa.
+Además entró un componente nuevo, la fuerza de equipo medida por mapa en el corpus, a mitad de peso
+cuando los standings ya están (los dos miden lo mismo y sumarlos enteros contaría doble).
+
+### Qué campeones escalan de verdad, y por qué todavía no se puede decir
+
+La tabla congelada tiene una columna `scale` que es juicio. Se puede medir: winrate de cada campeón
+en partidas largas contra cortas, con el corte en la mediana. Y lo mismo para "teamfight", cortando
+por kills totales en vez de por duración.
+
+**Ningún campeón sobrevive a la corrección por comparaciones múltiples** (Benjamini-Hochberg,
+q=0.10), en ninguno de los dos análisis.
+
+Sin corregir aparecían 5 "escaladores" y 6 "peleadores". Probar ~59 campeones al 95% produce **3 por
+puro azar**, así que quedarse con los que cruzan el umbral sería exactamente el error que este
+método existe para evitar. Dos detalles del camino que valen la pena:
+
+- El primer intento usaba el error estándar clásico para la diferencia de proporciones y devolvió un
+  intervalo `[65, 110]` — imposible. Se cambió por el método de Newcombe, que se construye sobre dos
+  intervalos de Wilson y queda siempre dentro de rango.
+- El mínimo por lado subió de 4 a 8 partidas: 12 partidas repartidas 8/4 no miden nada.
+
+Para responder esto de verdad hace falta más corpus del que junta un split. Como cada índice queda
+guardado, la respuesta mejora sola a medida que se indexan más torneos.
 
 ### Lo no narrable, medido
 
