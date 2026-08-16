@@ -187,8 +187,46 @@ export function band(delta) {
  */
 export const RAW_NARRATABLE_MIN = 1.0;
 
+/**
+ * Umbrales MEDIDOS sobre el corpus indexado, por eje.
+ *
+ * El 1.0 de arriba es una regla de dedo que salió de un fallo concreto y se
+ * aplica igual a los cinco ejes, aunque tengan dispersiones muy distintas.
+ * engine/validation.js lo mide: para cada eje, a partir de cuántos puntos crudos
+ * el lado favorecido gana más seguido.
+ *
+ * La medición solo puede ENDURECER el umbral, nunca aflojarlo. Aflojar porque un
+ * corpus chico lo permite es el error que este proyecto trata de no cometer;
+ * endurecer de más solo te vuelve más callado, que es barato.
+ */
+let measuredThresholds = null;
+
+export function setMeasuredThresholds(map) {
+  measuredThresholds = map ?? null;
+}
+
+/**
+ * Resolución medida del confusor de asedio, para que la advertencia diga lo que
+ * el corpus muestra en vez de repetir "ambigüedad declarada" para siempre.
+ */
+let siegeVerdict = null;
+
+export function setSiegeVerdict(v) {
+  siegeVerdict = v ?? null;
+}
+
+/** Umbral vigente para un eje, y de dónde salió. */
+export function thresholdFor(axis) {
+  const m = axis ? measuredThresholds?.[axis]?.applied : null;
+  if (m != null && m > RAW_NARRATABLE_MIN) {
+    return { value: m, source: 'medido', measured: measuredThresholds[axis].measured };
+  }
+  return { value: RAW_NARRATABLE_MIN, source: 'por defecto', measured: measuredThresholds?.[axis]?.measured ?? null };
+}
+
 /** Único punto de decisión sobre si un eje es narrable. */
-export const isNarratable = (rawDelta) => Math.abs(rawDelta) > RAW_NARRATABLE_MIN;
+export const isNarratable = (rawDelta, axis = null) =>
+  Math.abs(rawDelta) > thresholdFor(axis).value;
 
 /**
  * Puntúa dos drafts. Devuelve la misma estructura que `score_draft.py --json`
@@ -247,13 +285,15 @@ export function scoreDraft(a, b) {
   const perAxis = INDEX_AXES.map((k) => {
     const dz = A.z[k] - B.z[k];
     const dRaw = A.raw[k] - B.raw[k];
+    const th = thresholdFor(k);
     return {
       axis: k,
       dz,
       dRaw,
       sd: REFERENCE_STATS[k].sd,
       favors: dRaw === 0 ? null : dRaw > 0 ? A.team : B.team,
-      narratable: isNarratable(dRaw),
+      narratable: isNarratable(dRaw, k),
+      threshold: th,
     };
   });
 
@@ -273,7 +313,11 @@ export function scoreDraft(a, b) {
     warnings.push(
       'Hay asedio/poke apreciable en el mapa: no está descartado que el índice mida ' +
         '"el poke está flojo en este parche" en vez de "el teamfight es mejor". ' +
-        'Ambigüedad declarada, no resuelta.'
+        (siegeVerdict
+          ? siegeVerdict.resolved
+            ? `Medido sobre el corpus indexado: ${siegeVerdict.verdict}`
+            : `Todavía sin resolver con datos: ${siegeVerdict.verdict}`
+          : 'Ambigüedad declarada, no resuelta: hace falta corpus indexado para separarla.')
     );
   }
 

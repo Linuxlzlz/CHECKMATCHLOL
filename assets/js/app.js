@@ -18,6 +18,7 @@ import * as ledger from './engine/ledger.js';
 import { diffChampions } from './engine/patchdiff.js';
 import {
   scoreDraft, classificationOf, setManualProfile, profileRow, AXES,
+  setMeasuredThresholds, setSiegeVerdict, RAW_NARRATABLE_MIN,
 } from './engine/index-score.js';
 import {
   structuralAxes, laneMatchups, concentrationAndWindow, NON_COMPUTABLE_AXES,
@@ -594,6 +595,14 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   const outcome = await resolveOpenSeries(ev).catch(() => null);
 
   // --- análisis ---
+
+  // Lo medido sobre el corpus se instala ANTES de puntuar el draft: el umbral de
+  // narrabilidad por eje y la resolución del confusor de asedio dejan de ser
+  // constantes de juicio y pasan a salir de los datos. Solo pueden endurecer.
+  const validation = state.metaIndex ? cachedValidation() : null;
+  setMeasuredThresholds(validation?.narratability ?? null);
+  setSiegeVerdict(validation?.siege ?? null);
+
   const score = scoreDraft(
     { team: blue.team, champions: blue.players.map((p) => p.champion) },
     { team: red.team, champions: red.players.map((p) => p.champion) }
@@ -601,6 +610,7 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   const axes = structuralAxes(blue, red);
   const lanes = laneMatchups(blue, red);
   const { edges, window: win7 } = concentrationAndWindow(blue, red, axes);
+
 
   // Segunda fuente: los ejes que Riot publica por campeón. Es lo que convierte
   // parte del Paso 2 de "no computable" en medido, y lo que permite contrastar
@@ -668,10 +678,6 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     ledger.autoResolve(state.gameId, resolved.winnerTeamId === blue.teamId ? 'A' : 'B');
   }
   const entryNow = ledger.getEntry(state.gameId) ?? entry;
-
-  // Validación: el sitio corriendo su propio test sobre el corpus indexado.
-  // Se memoiza: puntúa 68 drafts y el partido en vivo se repinta cada 20 s.
-  const validation = state.metaIndex ? cachedValidation() : null;
 
   const diagnostics = collectDiagnostics({
     score,
@@ -1212,6 +1218,14 @@ function cardIndex(score) {
     const pct = Math.max(-1, Math.min(1, ax.dz / 3));
     const w = Math.abs(pct) * 50;
     const left = pct >= 0 ? 50 : 50 - w;
+    const th = ax.threshold;
+    const flag = ax.narratable
+      ? ''
+      : `<div class="axis-flag">no narrable
+           <span class="th-src ${th?.source === 'medido' ? 'medido' : ''}">${th?.source === 'medido'
+             ? `umbral medido: ${th.measured} pts`
+             : `umbral por defecto: ${th?.value ?? RAW_NARRATABLE_MIN} pts`}</span>
+         </div>`;
     return `
       <div class="axis-row${ax.narratable ? '' : ' dim'}">
         <div class="axis-name">${AXIS_LABEL[ax.axis]}</div>
@@ -1220,10 +1234,12 @@ function cardIndex(score) {
         </div>
         <div class="axis-val">
           ${ax.dz >= 0 ? '+' : ''}${ax.dz.toFixed(2)} sd · ${ax.dRaw >= 0 ? '+' : ''}${ax.dRaw.toFixed(1)} pts
-          ${ax.narratable ? '' : '<div class="axis-flag">no narrable</div>'}
+          ${flag}
         </div>
       </div>`;
   }).join('');
+
+  const anyMeasured = score.perAxis.some((ax) => ax.threshold?.source === 'medido');
 
   const warns = score.warnings.map((w) => `<div class="note note-warn">${esc(w)}</div>`).join('');
 
@@ -1245,9 +1261,12 @@ function cardIndex(score) {
 
       <div style="margin-top:14px">
         <div class="muted-xs" style="margin-bottom:8px">
-          Diferencia por eje (${esc(A.team)} respecto de ${esc(B.team)}). Los ejes con menos de
-          1 punto crudo de diferencia se marcan como no narrables: los z-scores amplifican los
-          ejes de dispersión estrecha.
+          Diferencia por eje (${esc(A.team)} respecto de ${esc(B.team)}). Un eje se marca como no
+          narrable cuando su diferencia cruda no llega al umbral: los z-scores amplifican los ejes
+          de dispersión estrecha.
+          ${anyMeasured
+            ? 'Los umbrales marcados como <strong>medidos</strong> salen del corpus indexado, no de una regla de dedo.'
+            : 'Sin corpus indexado el umbral es el mismo para los cinco ejes (1 punto crudo), que es una regla de dedo y no una medición.'}
         </div>
         ${axisRows}
       </div>
@@ -1371,6 +1390,89 @@ function cardRiot(rAxes, cross, blue, red, riotMap) {
   );
 }
 
+/**
+ * A partir de cuántos puntos crudos cada eje dice algo. Reemplaza una regla de
+ * dedo aplicada por igual a los cinco ejes por una medición por eje.
+ */
+function cardNarratability(nar, n) {
+  if (!nar) return '';
+  const cell = (b) => {
+    if (!b || !b.n) return '<td class="num muted-xs">—</td>';
+    const cls = b.straddles ? '' : b.p > 0.5 ? 'ok-txt' : 'warn-txt';
+    return `<td class="num ${cls}" title="IC95 [${(b.low * 100).toFixed(0)}, ${(b.high * 100).toFixed(0)}] · n=${b.n}">
+      ${(b.p * 100).toFixed(0)}%<div class="muted-xs">n=${b.n}</div></td>`;
+  };
+  const rows = Object.entries(nar).map(([axis, r]) => `
+    <tr>
+      <td><strong>${AXIS_LABEL[axis]}</strong>
+        <div class="muted-xs">${r.measured != null
+          ? `umbral medido: ${r.measured} pts${r.tightened ? ' — endurece el de por defecto' : ' — no cambia el de por defecto'}`
+          : 'sin evidencia a ninguna magnitud'}</div></td>
+      ${cell(r.buckets[0])}${cell(r.buckets[1])}${cell(r.buckets[2])}${cell(r.buckets[3])}
+    </tr>`).join('');
+
+  const tightened = Object.entries(nar).filter(([, r]) => r.tightened).map(([a]) => AXIS_LABEL[a]);
+  // Distinguir "no hay evidencia" de "hay evidencia de que no": lo decide el n.
+  const powered = Object.values(nar).some((r) => r.wellPowered);
+  const noneSeparate = Object.values(nar).every((r) => r.measured == null);
+
+  return `
+    <div class="muted-xs" style="margin:18px 0 6px">¿A partir de cuántos puntos crudos dice algo cada eje?
+      Tasa de acierto del lado favorecido, por magnitud de la diferencia cruda (${n} mapas).</div>
+    <div class="table-scroll">
+      <table class="detail-table nar-table">
+        <thead><tr><th>Eje</th><th>1 pt</th><th>2 pts</th><th>3 pts</th><th>4+ pts</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="note ${tightened.length || (noneSeparate && powered) ? 'note-warn' : ''}">
+      ${tightened.length
+        ? `Con esta medición se <strong>endurece</strong> el umbral de ${esc(tightened.join(', '))}: por
+           debajo de lo medido esos ejes no separan ganadores, así que dejan de narrarse aunque su
+           z-score sea alto.`
+        : noneSeparate && powered
+          ? `<strong>Ningún eje separa ganadores a ninguna magnitud</strong>, y con estos n no es por
+             falta de muestra: los intervalos son estrechos y todos contienen el 50%. O sea que la
+             pregunta "¿desde cuántos puntos se puede narrar un eje?" no tiene respuesta acá, porque
+             ni con 4 o más puntos de diferencia el eje dice quién gana. El umbral de 1 punto no
+             estaba siendo demasiado conservador: si algo, se queda corto.`
+          : 'Ningún eje justifica endurecer el umbral por encima del punto crudo de siempre, pero los n todavía son chicos.'}
+      La medición <strong>solo puede endurecer</strong>, nunca aflojar. Si el corpus dijera que con
+      medio punto ya alcanza, no se afloja igual: aflojar un umbral porque una muestra lo permite es
+      tomar cinco observaciones y convertirlas en una regla, que es el error que este método existe
+      para evitar. Endurecer de más solo te vuelve más callado.
+    </div>`;
+}
+
+/** El confusor que el método declaraba y no resolvía. */
+function cardSiege(s) {
+  if (!s) return '';
+  const line = (label, o) => `
+    <div class="row">
+      <span class="row-label">${label} <span class="muted-xs">n=${o.n}</span></span>
+      <span class="row-val">${o.tf
+        ? `teamfight ${(o.tf.p * 100).toFixed(0)}%<br><span class="muted-xs">IC95 [${(o.tf.low * 100).toFixed(0)}, ${(o.tf.high * 100).toFixed(0)}]${o.tf.straddles ? ' — no distingue' : ''}</span>`
+        : '<span class="muted-xs">sin casos</span>'}</span>
+    </div>`;
+
+  return `
+    <div class="muted-xs" style="margin:18px 0 6px">Teamfight contra asedio: ¿cuál de los dos es la señal?</div>
+    ${line('Los dos ejes apuntan al mismo lado', s.agree)}
+    ${line('Los ejes discrepan', s.disagree)}
+    ${s.corr != null ? `<div class="muted-xs">Correlación entre las dos diferencias: ${s.corr.toFixed(2)}.
+      ${Math.abs(s.corr) > 0.3
+        ? 'Se superponen bastante, que es justo lo que crea la ambigüedad: en la mayoría de los mapas los dos ejes apuntan al mismo lado y no se pueden distinguir.'
+        : 'Se superponen poco, así que los dos ejes son más independientes de lo que la advertencia sugiere.'}</div>` : ''}
+    <div class="note ${s.resolved ? 'note-ok' : 'note-warn'}">
+      <strong>${s.resolved ? 'Ambigüedad resuelta en este corpus.' : 'Ambigüedad todavía abierta.'}</strong>
+      ${esc(s.verdict)}
+      <div class="muted-xs" style="margin-top:6px">El acuerdo entre los dos ejes es redundancia, no
+        confirmación: las comps con mucho poke suelen tener poco daño de área e inicio, así que
+        tienden a apuntar al mismo lado por construcción. Los únicos mapas que discriminan entre
+        "el teamfight es mejor" y "el poke está flojo" son aquellos donde se contradicen.</div>
+    </div>`;
+}
+
 /** El sitio corriendo su propio test sobre el corpus que indexó. */
 function cardValidation(v) {
   if (!v) {
@@ -1451,6 +1553,9 @@ function cardValidation(v) {
            ${(v.shortGames.p * 100).toFixed(0)}%<br>
            <span class="muted-xs">control: acá el escalado NO debería predecir</span></span></div>` : ''}
      ` : ''}
+
+     ${cardNarratability(v.narratability, v.n)}
+     ${cardSiege(v.siege)}
 
      ${v.side ? `
        <div class="muted-xs" style="margin:16px 0 6px">Control de sanidad del resolutor de ganadores</div>

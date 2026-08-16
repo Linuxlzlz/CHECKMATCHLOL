@@ -267,6 +267,19 @@ export function collectDiagnostics(ctx) {
       );
     }
     const strong = v.byBand?.strong;
+    // Con muestra suficiente para excluir el 74%, el componente de draft de la
+    // probabilidad se apoya en una regla que el propio corpus no sostiene.
+    if (strong?.n >= 60 && strong.straddles && strong.high < 0.74) {
+      add(
+        'parcial',
+        'indice-no-reproduce',
+        `El índice no reproduce el 74% declarado: ${(strong.p * 100).toFixed(0)}% en ${strong.n} mapas`,
+        `IC95 [${(strong.low * 100).toFixed(0)}, ${(strong.high * 100).toFixed(0)}], que excluye el ` +
+          '74% y contiene el 50%. Con este n ya no es falta de muestra. El componente de draft de la ' +
+          'probabilidad de arriba se apoya en esa regla, así que hay que leerlo como la parte más ' +
+          'floja del número — y la postura NO BET, como la más justificada.'
+      );
+    }
     if (strong?.n >= 6 && !strong.straddles && strong.p < 0.5) {
       add(
         'bloqueante',

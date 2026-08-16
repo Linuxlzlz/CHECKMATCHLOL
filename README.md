@@ -153,25 +153,64 @@ El índice de torneo ahora guarda el corpus por mapa: los dos drafts, el ganador
 eso se puede volver a correr el test del índice sobre partidos que el backtest original no vio, en
 vez de citar el 74% de memoria.
 
-**Resultado sobre LCK split 3 2026 (68 mapas): no reproduce.** En la banda grande y dentro del
-régimen limpio acertó 14 de 30 (47%), IC95 [30, 64]. El intervalo cruza el 50%: en ese corpus la
-regla no se distingue de tirar una moneda.
+**Resultado sobre las 6 ligas, 405 mapas con ganador resuelto: contradice lo declarado.** En la
+banda grande y dentro del régimen limpio acertó **109 de 213 (51%), IC95 [44, 58]**.
+
+Ese intervalo contiene el 50% y **excluye el 74%**. Con n=213 esto ya no es "falta de muestra": es
+un resultado en contra de la cifra que el método viene citando.
 
 Qué significa y qué no:
 
-- **No la refuta.** El IC todavía se toca con el [57, 86] del backtest original, y los dos n son
-  chicos. Pero esa muestra no la sostiene, y el sitio no dice que sí.
-- **Separar por régimen tiene contenido.** Fuera de régimen (las dos comps por debajo del promedio)
-  la banda grande acertó 2 de 9. La advertencia que imprime el script no es una excusa: marca una
-  población donde el índice anda peor.
 - **No es el backtest original reejecutado.** Aquel corría sobre Oracle's Elixir con su propia
-  selección de partidos; esto es una reimplementación sobre otro corpus, otra liga y otro parche.
-  Una diferencia puede venir de la regla, del meta o del método de selección, y con estos n no se
-  pueden separar.
-- **Hay un control de sanidad.** El winrate del lado azul en el corpus da 57,4%, que es lo esperable
-  en LoL profesional. Eso no valida el índice: valida que el ganador inferido por mapa no está
-  sesgado hacia un lado. Si ese número se fuera de rango, toda la validación quedaría en duda y el
-  panel lo marca como bloqueante.
+  selección de partidos; esto es una reimplementación sobre otro corpus, otras ligas y otro parche.
+  La diferencia puede venir de la regla, del meta o del método de selección, y estos datos no las
+  separan. Pero usar la regla *como si valiera 74%* no está justificado con esto sobre la mesa.
+- **Separar por régimen tiene contenido.** Fuera de régimen (las dos comps por debajo del promedio)
+  el índice anda peor. La advertencia que imprime el script no es una excusa: marca una población
+  real.
+- **Hay un control de sanidad.** El winrate del lado azul da 57% [52, 61], que es lo esperable en
+  LoL profesional. Eso no valida el índice: valida que el ganador inferido por mapa no está sesgado
+  hacia un lado. Si ese número se fuera de rango, toda la validación quedaría en duda y el panel lo
+  marca como bloqueante.
+
+### Lo no narrable, medido
+
+El umbral de narrabilidad era una regla de dedo — menos de 1 punto crudo no se narra — nacida de un
+fallo concreto y aplicada por igual a los cinco ejes, aunque tengan dispersiones muy distintas. Con
+corpus se puede medir: para cada eje, ¿a partir de cuántos puntos crudos gana más seguido el lado
+favorecido?
+
+**Ningún eje separa ganadores a ninguna magnitud.** Ni con 4 o más puntos de diferencia. Los
+intervalos son estrechos (el bucket más grande tiene n=195) y todos contienen el 50%.
+
+O sea que la pregunta "¿desde cuántos puntos se puede narrar un eje?" no tiene respuesta en estos
+datos, porque ningún corte lo vuelve informativo. El umbral de 1 punto no estaba siendo demasiado
+conservador: si algo, se queda corto.
+
+La medición **solo puede endurecer** el umbral, nunca aflojarlo. Aflojar porque una muestra lo
+permite es tomar cinco observaciones y convertirlas en una regla, que es el error que este método
+existe para evitar; endurecer de más solo te vuelve más callado, que sale barato.
+
+### El confusor de asedio, resuelto (y no como se esperaba)
+
+El script declaraba una ambigüedad sin resolver: cuando hay poke en el mapa, no está descartado que
+el índice mida *"el asedio está flojo en este parche"* en vez de *"el teamfight es mejor"*.
+
+Se separa con los mapas donde los dos ejes **discrepan**, que son los únicos que discriminan — el
+mismo principio del Paso 10 aplicado a ejes en vez de a capas.
+
+| | n | Acierto del eje de teamfight |
+|---|---|---|
+| Los dos ejes coinciden | 148 | 50% [42, 58] |
+| Los ejes discrepan | 131 | 53% [44, 61] |
+
+**La ambigüedad se disuelve, pero no en favor de ninguna de las dos hipótesis: no hay señal que
+atribuirle a ninguno de los dos ejes.** La pregunta "¿cuál de los dos mide?" presupone que alguno
+mide, y eso es lo que no se sostiene.
+
+Además la correlación entre las dos diferencias es **0.06**: los ejes son casi independientes en
+este corpus, así que la premisa del confusor —que las comps de poke tienen poco daño de área e
+inicio— tampoco se verifica.
 
 ## Decisiones que hacen que esto no mienta
 
@@ -187,9 +226,10 @@ prosa:
 - **La ventana no se declara** si la brecha de escalado no supera ese umbral.
 - **El z absoluto no es la brecha de matchup.** La UI muestra siempre la diferencia entre las dos
   comps y lo dice explícitamente.
-- **La banda grande vale 74%**, con IC95 [57, 86]. El lenguaje está calibrado a eso: falla una de
-  cada cuatro. Y ahora el sitio además lo testea sobre su propio corpus, donde no reproduce: la
-  tarjeta de validación muestra el número medido junto al declarado, sin elegir el que conviene.
+- **La banda grande valía 74%**, con IC95 [57, 86], y el lenguaje estaba calibrado a eso. Sobre 405
+  mapas propios da 51% [44, 58], que excluye el 74%. El sitio muestra el número medido junto al
+  declarado, sin elegir el que conviene, y el panel de diagnóstico marca que el componente de draft
+  de la probabilidad se apoya en una regla que su propio corpus no sostiene.
 - **Lo que falta, falta ruidosamente.** Un campeón con cero picks es *sin datos*, no "pick
   sorpresa". Los ejes del Paso 2 que la tabla no puede sostener (desenganche, peel, waveclear,
   velocidad de objetivo) se listan como no computables en vez de recibir un número inventado.

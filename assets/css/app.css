@@ -565,3 +565,14 @@ code {
   font-size: 11.5px; color: var(--text-mute); padding: 0 0 10px 4px;
   border-left: 2px solid var(--accent-dim); padding-left: 10px; margin-bottom: 4px;
 }
+
+/* --- umbral medido por eje ------------------------------------------ */
+.table-scroll { overflow-x: auto; }
+.nar-table { min-width: 420px; }
+.nar-table th:not(:first-child), .nar-table td:not(:first-child) { text-align: right; width: 70px; }
+.nar-table td { vertical-align: top; }
+.axis-flag .th-src {
+  display: block; font-size: 9px; font-weight: 600; letter-spacing: .02em;
+  color: var(--text-mute); text-transform: none; margin-top: 1px;
+}
+.axis-flag .th-src.medido { color: var(--accent); }

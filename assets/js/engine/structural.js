@@ -9,7 +9,7 @@
  * "Si un dato no está, que falte ruidosamente."
  */
 
-import { rawScores, RAW_NARRATABLE_MIN, isNarratable, profileRow } from './index-score.js';
+import { rawScores, isNarratable, thresholdFor, profileRow } from './index-score.js';
 
 const ROLE_ORDER = ['top', 'jungle', 'mid', 'bottom', 'support'];
 export const ROLE_LABEL = {
@@ -160,7 +160,7 @@ export function structuralAxes(sideA, sideB) {
         : rawA.scores.scaling > rawB.scores.scaling
           ? sideA.team
           : sideB.team,
-    narratable: isNarratable(rawA.scores.scaling - rawB.scores.scaling),
+    narratable: isNarratable(rawA.scores.scaling - rawB.scores.scaling, 'scaling'),
   });
 
   // 7. Coherencia interna de tempo: ¿los cinco quieren ganar en el mismo minuto?
@@ -311,15 +311,19 @@ export function concentrationAndWindow(sideA, sideB, axes) {
   const scaling = axes.find((x) => x.id === 'scaling');
   const dScale = scaling.a - scaling.b;
   let window;
-  if (!isNarratable(dScale)) {
+  if (!isNarratable(dScale, 'scaling')) {
     const n = Math.abs(dScale);
+    const th = thresholdFor('scaling');
     window = {
       declared: false,
       reason:
         `La brecha de escalado es de ${n.toFixed(0)} ${n === 1 ? 'punto crudo' : 'puntos crudos'}, ` +
-        `y el umbral para narrar un eje es más de ${RAW_NARRATABLE_MIN}. No hay ventana declarable: ` +
-        `sobre exactamente 1 punto ya se construyó una narrativa de "ventana con fecha de ` +
-        `vencimiento" el 15/08 y perdió. Un punto en una suma de cinco campeones es un campeón ` +
+        `y el umbral para narrar este eje es más de ${th.value} ` +
+        (th.source === 'medido'
+          ? `(medido sobre el corpus indexado: por debajo de ${th.measured} puntos el eje no separa ganadores).`
+          : `(por defecto: sobre exactamente 1 punto ya se construyó una narrativa de "ventana con ` +
+            `fecha de vencimiento" el 15/08 y perdió).`) +
+        ` No hay ventana declarable. Un punto en una suma de cinco campeones es un campeón ` +
         `puntuado 2 en vez de 3 por juicio propio.`,
     };
   } else {
