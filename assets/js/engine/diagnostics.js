@@ -85,7 +85,19 @@ export function collectDiagnostics(ctx) {
   }
 
   /* --- capas de campeón y jugador ---------------------------------- */
-  if (!ctx.metaIndex) {
+  if (!ctx.metaIndex && ctx.metaBuilding) {
+    // "Ausente" y "todavía no llegó" no son lo mismo, y el botón de indexar no
+    // hace nada mientras hay una construcción en curso: era un botón muerto.
+    const p = ctx.metaProgress;
+    add(
+      'parcial',
+      'indice-en-curso',
+      'Las capas de campeón y de jugador se están construyendo',
+      (p?.label ? `${p.label} ${p.done ?? 0}${p.total ? ` de ${p.total}` : ''}. ` : '') +
+        'El informe se rearma solo cuando termine. Hasta entonces el veredicto de arriba está ' +
+        'construido sin los pasos 4 y 5.'
+    );
+  } else if (!ctx.metaIndex) {
     add(
       'bloqueante',
       'sin-indice',
@@ -198,7 +210,14 @@ export function collectDiagnostics(ctx) {
   }
 
   /* --- parche ------------------------------------------------------- */
-  if (!ctx.patchDiff) {
+  if (!ctx.patchDiff && ctx.patchDiffBusy) {
+    add(
+      'parcial',
+      'parche-en-curso',
+      'Comparando el parche con el anterior',
+      'Se están bajando las fichas de los diez campeones en las dos versiones de Data Dragon.'
+    );
+  } else if (!ctx.patchDiff) {
     add(
       'parcial',
       'parche-sin-comparar',
@@ -206,6 +225,66 @@ export function collectDiagnostics(ctx) {
       'Sin la comparación, el sitio reporta la versión y no puede decir si alguno de los diez ' +
         'campeones cambió. "No sé" y "no cambió" no son lo mismo.',
       { id: 'comparar-parche', label: 'Comparar parche' }
+    );
+  }
+
+  /* --- segunda fuente ----------------------------------------------- */
+  if (ctx.riot && !ctx.riot.available) {
+    add(
+      'parcial',
+      'sin-segunda-fuente',
+      'La segunda fuente de campeones no cargó',
+      'Sin los datos que Riot publica por campeón (Community Dragon), vuelven a quedar sin medir ' +
+        'el neutral a rango, el peel, el desenganche y la mezcla de daño, y la tabla propia se ' +
+        'queda otra vez sin nada contra qué contrastarse.'
+    );
+  } else if (ctx.riot?.cross?.disagreements?.length) {
+    const d = ctx.riot.cross.disagreements;
+    add(
+      'parcial',
+      'discrepancia-fuentes',
+      `Las dos fuentes discrepan en ${d.length} campeón${d.length === 1 ? '' : 'es'}: ${d.map((r) => r.champion).join(', ')}`,
+      'El eje de frontline de la tabla propia y el de durabilidad de Riot se llevan 2 o más puntos. ' +
+        'O la tabla tiene un error, o el campeón cambió de rol desde que se escribió. Mientras no ' +
+        'se resuelva, los ejes estructurales de esos campeones son la parte más floja del análisis.',
+      { id: 'abrir-editor', label: 'Revisar la tabla' }
+    );
+  }
+
+  /* --- validación del propio método --------------------------------- */
+  if (ctx.validation?.usable && ctx.validation.enough) {
+    const v = ctx.validation;
+    if (v.sideSane === false) {
+      add(
+        'bloqueante',
+        'resolutor-sesgado',
+        'El winrate por lado del corpus está fuera de lo esperable',
+        `El lado azul aparece con ${(v.side.p * 100).toFixed(0)}% en ${v.side.n} mapas. En LoL ` +
+          'profesional debería estar cerca del 50-58%. Un valor tan corrido apunta a que el ganador ' +
+          'inferido de cada mapa tiene un sesgo por lado, y si es así el winrate de campeón y la ' +
+          'validación del índice quedan los dos en duda.',
+        { id: 'reindexar', label: 'Reindexar' }
+      );
+    }
+    const strong = v.byBand?.strong;
+    if (strong?.n >= 6 && !strong.straddles && strong.p < 0.5) {
+      add(
+        'bloqueante',
+        'indice-invertido',
+        'En este corpus el índice apunta al lado contrario',
+        `La banda grande acertó ${strong.hits} de ${strong.n} (${(strong.p * 100).toFixed(0)}%), con ` +
+          'el IC sin cruzar el 50%. Si esto se sostiene al crecer la muestra, la regla está mal ' +
+          'orientada y no habría que usarla hasta revisarla.'
+      );
+    }
+  } else if (ctx.metaIndex && ctx.validation?.usable && !ctx.validation.enough) {
+    add(
+      'parcial',
+      'validacion-sin-muestra',
+      `El corpus tiene ${ctx.validation.n} mapas: no alcanza para validar el índice`,
+      'El 74% de la banda grande sigue siendo una cita del backtest original, sin poder ' +
+        'reproducirse acá. Indexar más ligas junta corpus y lo vuelve testeable.',
+      { id: 'indexar-mas', label: 'Indexar otra liga' }
     );
   }
 
@@ -222,12 +301,20 @@ export function collectDiagnostics(ctx) {
   }
 
   /* --- límites del método ------------------------------------------- */
+  const sinFuente = NON_COMPUTABLE_AXES.filter(([, , s]) => s === 'sin-fuente');
+  const porProxy = NON_COMPUTABLE_AXES.filter(([, , s]) => s === 'proxy');
+  const resueltos = NON_COMPUTABLE_AXES.filter(([, , s]) => s === 'resuelto');
   add(
     'declarado',
     'ejes-no-computables',
-    `${NON_COMPUTABLE_AXES.length} ejes del Paso 2 no son computables desde la tabla`,
-    NON_COMPUTABLE_AXES.map(([n]) => n).join(' · ') +
-      '. Quedan para lectura humana; el sitio no les inventa un número.'
+    `${sinFuente.length} ejes del Paso 2 siguen sin ninguna fuente`,
+    `${sinFuente.map(([n]) => n).join(' · ')}. No hay dato accesible: quedan para lectura humana y ` +
+      `el sitio no les inventa un número. ` +
+      (porProxy.length || resueltos.length
+        ? `De los otros: ${resueltos.map(([n]) => n).join(', ')} pasó a medirse como hecho y ` +
+          `${porProxy.map(([n]) => n).join(', ')} se mide${porProxy.length === 1 ? '' : 'n'} por proxy ` +
+          `con los datos que publica Riot. Proxy no es identidad y la tarjeta lo aclara.`
+        : '')
   );
 
   const order = { bloqueante: 0, parcial: 1, declarado: 2 };

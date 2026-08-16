@@ -19,7 +19,8 @@ import { finalStateOf, resolveSeries } from './outcome.js';
 const CACHE_PREFIX = 'cml:meta:';
 const CACHE_KEY = (tid) => `${CACHE_PREFIX}${tid}`;
 const CACHE_TTL = 6 * 3600 * 1000;
-const INDEX_VERSION = 2;
+// v3 agrega `maps`: el corpus por mapa que necesita la validación.
+const INDEX_VERSION = 3;
 
 /** Intervalo de Wilson al 95%. Se usa para el filtro "el IC no cruza el 50%". */
 export function wilson(wins, n) {
@@ -216,12 +217,33 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
     }
   };
 
+  // Corpus por mapa: draft de los dos lados + ganador + duración. Es lo que
+  // permite que el sitio vuelva a correr su propio test en vez de citar de
+  // memoria el 74% del backtest. Ocupa poco y sin esto no hay validación posible.
+  const mapCorpus = [];
+
   for (const g of games) {
     const d = draftById[g.gameId];
     if (!d?.players?.length) continue;
     gamesCounted++;
     const winner = winnerOf[g.gameId] ?? null;
     if (winner) gamesAttributable++;
+
+    const champsOf = (teamId) =>
+      d.players.filter((p) => p.teamId === teamId).map((p) => p.champion);
+    const blueChamps = champsOf(g.blueTeamId);
+    const redChamps = champsOf(g.redTeamId);
+    if (blueChamps.length === 5 && redChamps.length === 5) {
+      mapCorpus.push({
+        gameId: g.gameId,
+        patch: d.patch ?? null,
+        blue: blueChamps,
+        red: redChamps,
+        winner: winner ? (winner === g.blueTeamId ? 'blue' : 'red') : null,
+        method: methodOf[g.gameId] ?? null,
+        duration: durations[g.gameId] != null ? +durations[g.gameId].toFixed(1) : null,
+      });
+    }
     if (methodOf[g.gameId]) methods[methodOf[g.gameId]] = (methods[methodOf[g.gameId]] ?? 0) + 1;
     if (d.patch) patches[d.patch] = (patches[d.patch] ?? 0) + 1;
 
@@ -309,6 +331,7 @@ export async function buildTournamentIndex(leagueId, tournament, opts = {}) {
       emptyDrafts: Math.max(0, emptyDrafts),
       any: matchFailures.length + gameFailures.length + Math.max(0, emptyDrafts) > 0,
     },
+    maps: mapCorpus,
     champions: Object.fromEntries(champions),
     players: Object.fromEntries(players),
     teams: Object.fromEntries(teams),
@@ -336,6 +359,7 @@ function emptyIndex(tid, tournament, leagueId, league, reason) {
     patches: {},
     duration: null,
     failures: { matches: 0, games: 0, emptyDrafts: 0, any: false },
+    maps: [],
     champions: {},
     players: {},
     teams: {},

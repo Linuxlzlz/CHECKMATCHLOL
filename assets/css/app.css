@@ -532,3 +532,36 @@ button { font: inherit; cursor: pointer; }
 }
 .ax-in input:focus { outline: 0; border-color: var(--accent); }
 .editor-btns { display: flex; gap: 6px; }
+
+/* --- segunda fuente y validación ------------------------------------ */
+.kind {
+  font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 5px; border-radius: 3px; margin-left: 5px; vertical-align: 1px;
+}
+.kind-fact { background: rgba(62,207,142,.15); color: var(--green); }
+.kind-proxy { background: rgba(240,167,66,.14); color: var(--warn); }
+
+.riot-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 4px; }
+.riot-chip {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 4px;
+  background: var(--bg-inset); border: 1px solid var(--line-soft); border-radius: 100px;
+}
+.riot-chip img { width: 20px; height: 20px; border-radius: 50%; }
+
+.cross { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.cross-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  font-size: 12.5px; font-weight: 650; margin-bottom: 8px; flex-wrap: wrap;
+}
+.cross-row {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; margin-bottom: 6px;
+  background: rgba(240,167,66,.07); border-left: 2px solid var(--warn); border-radius: 0 6px 6px 0;
+}
+code {
+  font-family: var(--mono); font-size: 11.5px; background: var(--bg-inset);
+  padding: 1px 5px; border-radius: 3px; color: var(--accent);
+}
+.sug {
+  font-size: 11.5px; color: var(--text-mute); padding: 0 0 10px 4px;
+  border-left: 2px solid var(--accent-dim); padding-left: 10px; margin-bottom: 4px;
+}

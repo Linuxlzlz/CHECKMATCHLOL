@@ -20,6 +20,8 @@ a lo más interpretativo:
 | Draft | Los diez campeones por posición, mapeados por `esportsTeamId`, con suplentes marcados |
 | Índice | Δ de teamfight en desviaciones estándar, banda y arquetipo primario |
 | Concentración | Las una o dos posiciones donde se concentra el margen estructural |
+| Segunda fuente | Ejes que publica Riot por campeón, y contraste contra la tabla propia |
+| Validación | El sitio corriendo su propio test sobre el corpus que indexó |
 | Oro por rol | Dónde se concentró el oro de verdad, contrastado contra lo que predijo el draft |
 | Detalle por jugador | Daño, participación en kills, visión e ítems |
 | Capa de campeón | Winrate por torneo, solo con 10+ picks |
@@ -50,6 +52,8 @@ assets/js/
   engine/structural.js    ejes de counter, matchups, concentración y ventana
   engine/meta.js          índice de torneo: capas de campeón y jugador, rosters
   engine/outcome.js       ganador por mapa desde el frame final, verificado contra la serie
+  engine/riot-profile.js  segunda fuente: ejes de campeón publicados por Riot
+  engine/validation.js    el test del índice corrido sobre el corpus indexado
   engine/diagnostics.js   qué quedó sin diagnosticar y por qué
   engine/checkpoints.js   estado en minutos exactos, oro por rol, señales de detalle
   engine/live.js          señales de verificación en vivo
@@ -98,7 +102,15 @@ el minuto 15 se pide pidiendo el minuto 15. Quedan guardados con fecha en el reg
 | Draft, parche, estado en vivo | `feed.lolesports.com/livestats/v1/window/{gameId}` | sí |
 | Stats por jugador | `feed.lolesports.com/livestats/v1/details/{gameId}` | sí |
 | Retratos de campeón | Data Dragon | sí |
+| Ejes de campeón de Riot | `raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/…` | sí |
 | gol.gg | — | **no** |
+| Oracle's Elixir (CSV) | — | **no** |
+| Meraki Analytics | — | **no** |
+| Leaguepedia (Cargo API) | `lol.fandom.com/api.php` | sí, pero con rate limit |
+
+Probadas todas desde el navegador, no supuestas. Leaguepedia responde con CORS abierto y tendría
+bans y ganador por mapa, pero devolvió `ratelimited` de forma sostenida desde este entorno, así que
+no se conectó: una fuente que falla la mitad de las veces es peor que no tenerla.
 
 `gol.gg` no manda cabeceras CORS, así que no es consultable desde el navegador. En vez de
 scrapearlo, las capas de campeón y jugador se reconstruyen desde la fuente primaria: al entrar a
@@ -109,6 +121,57 @@ y acumulando picks, winrate, rol y parche por campeón y por jugador. El índice
 Cuando el torneo vigente no tiene muestra suficiente para un campeón, se puede **indexar otra
 liga**: el agregado aparece como respaldo etiquetado, nunca reemplazando el dato del torneo. Otra
 liga es otro meta, y el Paso 4 pide el winrate *de este torneo*.
+
+### La segunda fuente, y qué deja de ser incomprobable
+
+Todo lo estructural salía de **una** tabla de juicio propio, y cinco ejes del Paso 2 se declaraban
+no computables. Eso era honesto pero terminal: sin otra fuente no había forma de comprobarlos nunca.
+
+Community Dragon publica los datos del cliente de LoL, y ahí Riot expone su propia caracterización
+de cada campeón: `crowdControl`, `durability`, `mobility`, `damage`, `utility` (0-3), más
+`damageType` y `attackType`. Con eso:
+
+| Eje del Paso 2 | Antes | Ahora |
+|---|---|---|
+| Neutral a rango | no computable | **hecho** — cuerpo a cuerpo contra distancia es un conteo |
+| Peel | no computable | **proxy** — el eje de CC de Riot |
+| Desenganche | no computable | **proxy** — CC más movilidad |
+| Waveclear | no computable | sigue sin fuente |
+| Velocidad de objetivo | no computable | sigue sin fuente |
+
+Y aparece un eje que no existía en ninguna forma: la **mezcla de daño** físico/mágico, que decide si
+el rival puede apilar una sola resistencia. Es dato puro.
+
+Lo más importante no es sumar ejes: es que la tabla congelada por fin tiene **algo con qué
+contrastarse**. El eje `fl` (juicio propio) contra `durability` (Riot) miden casi lo mismo, así que
+donde se llevan 2 o más puntos hay una de dos cosas — un error en la tabla, o un campeón que cambió
+de rol desde que se escribió. El sitio lo muestra y no corrige nada solo.
+
+### El sitio corriendo su propio test
+
+El índice de torneo ahora guarda el corpus por mapa: los dos drafts, el ganador y la duración. Con
+eso se puede volver a correr el test del índice sobre partidos que el backtest original no vio, en
+vez de citar el 74% de memoria.
+
+**Resultado sobre LCK split 3 2026 (68 mapas): no reproduce.** En la banda grande y dentro del
+régimen limpio acertó 14 de 30 (47%), IC95 [30, 64]. El intervalo cruza el 50%: en ese corpus la
+regla no se distingue de tirar una moneda.
+
+Qué significa y qué no:
+
+- **No la refuta.** El IC todavía se toca con el [57, 86] del backtest original, y los dos n son
+  chicos. Pero esa muestra no la sostiene, y el sitio no dice que sí.
+- **Separar por régimen tiene contenido.** Fuera de régimen (las dos comps por debajo del promedio)
+  la banda grande acertó 2 de 9. La advertencia que imprime el script no es una excusa: marca una
+  población donde el índice anda peor.
+- **No es el backtest original reejecutado.** Aquel corría sobre Oracle's Elixir con su propia
+  selección de partidos; esto es una reimplementación sobre otro corpus, otra liga y otro parche.
+  Una diferencia puede venir de la regla, del meta o del método de selección, y con estos n no se
+  pueden separar.
+- **Hay un control de sanidad.** El winrate del lado azul en el corpus da 57,4%, que es lo esperable
+  en LoL profesional. Eso no valida el índice: valida que el ganador inferido por mapa no está
+  sesgado hacia un lado. Si ese número se fuera de rango, toda la validación quedaría en duda y el
+  panel lo marca como bloqueante.
 
 ## Decisiones que hacen que esto no mienta
 
@@ -125,7 +188,8 @@ prosa:
 - **El z absoluto no es la brecha de matchup.** La UI muestra siempre la diferencia entre las dos
   comps y lo dice explícitamente.
 - **La banda grande vale 74%**, con IC95 [57, 86]. El lenguaje está calibrado a eso: falla una de
-  cada cuatro.
+  cada cuatro. Y ahora el sitio además lo testea sobre su propio corpus, donde no reproduce: la
+  tarjeta de validación muestra el número medido junto al declarado, sin elegir el que conviene.
 - **Lo que falta, falta ruidosamente.** Un campeón con cero picks es *sin datos*, no "pick
   sorpresa". Los ejes del Paso 2 que la tabla no puede sostener (desenganche, peel, waveclear,
   velocidad de objetivo) se listan como no computables en vez de recibir un número inventado.
@@ -197,6 +261,11 @@ forma sostenida, el número propio no aporta sobre el precio.
   verdad revelada.
 - Las 20 filas de la **tabla de extensión son juicio propio**, igual que la congelada, pero sin el
   respaldo del backtest. Se pueden corregir desde el editor.
+- Los ejes de Riot **son de Riot**: describen el kit del campeón, no cómo se juega en profesional.
+  `crowdControl` alto no distingue CC de peel de CC de inicio, y por eso peel y desenganche se
+  marcan como *proxy* y no como medidos.
+- La **validación mide la regla, no la tabla**: las dos usan el mismo juicio sobre qué es cada
+  campeón, así que un fallo del índice no dice cuál de las dos cosas está mal.
 - El índice de torneo depende de que la liga tenga partidos terminados en el split vigente.
 - Los ejes estructurales se derivan de una tabla de juicio, no de datos medidos.
 

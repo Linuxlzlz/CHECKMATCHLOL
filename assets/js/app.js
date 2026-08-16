@@ -31,6 +31,11 @@ import {
 } from './engine/meta.js';
 import { finalStateOf, resolveSeries, METHOD_LABEL } from './engine/outcome.js';
 import { collectDiagnostics } from './engine/diagnostics.js';
+import {
+  initRiotProfiles, fetchProfiles, profileFor, riotAxes, crossCheck, suggestArchetype,
+  riotAvailable,
+} from './engine/riot-profile.js';
+import { validateIndex, validateAcross, readValidation } from './engine/validation.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) =>
@@ -64,6 +69,8 @@ const state = {
   patchDiffBusy: false,
   seriesOutcome: null,
   diagnostics: null,
+  patchDiffKey: null,
+  fixAll: null,
 };
 
 /* ------------------------------------------------------------------ *
@@ -147,7 +154,7 @@ async function init() {
     if (r && r.matchId !== state.matchId) applyRoute(r);
   });
 
-  await initDDragon();
+  await Promise.all([initDDragon(), initRiotProfiles()]);
 
   // La ruta manda; si no hay, se recupera la última visitada.
   let route = parseRoute(location.hash);
@@ -495,8 +502,9 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
       matchHeader(ev, game, games) +
       `<div class="card"><div class="card-body">
          <p class="muted">El feed no devuelve datos para este mapa todavía.</p>
-         <div class="note">Una respuesta vacía significa que <strong>el mapa no arrancó</strong>.
-           No es un error: es un "todavía no". El draft aparece cuando empieza la partida.</div>
+         <div class="note">${game?.state === 'inProgress'
+           ? 'El mapa figura <strong>en curso</strong> pero el feed todavía no publica frames. Pasa en el primer minuto y medio, entre que arranca la partida y que el feed la alcanza. Se resuelve solo en el próximo refresco.'
+           : 'Una respuesta vacía significa que <strong>el mapa no arrancó</strong>. No es un error: es un "todavía no". El draft aparece cuando empieza la partida.'}</div>
        </div></div>`,
       { preserve }
     );
@@ -594,6 +602,14 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   const lanes = laneMatchups(blue, red);
   const { edges, window: win7 } = concentrationAndWindow(blue, red, axes);
 
+  // Segunda fuente: los ejes que Riot publica por campeón. Es lo que convierte
+  // parte del Paso 2 de "no computable" en medido, y lo que permite contrastar
+  // la tabla congelada contra algo que no salió del mismo juicio.
+  const allChamps = [...blue.players, ...red.players].map((p) => p.champion);
+  const riotMap = await fetchProfiles(allChamps).catch(() => ({}));
+  const rAxes = riotAxes(blue, red, riotMap);
+  const cross = crossCheck(allChamps, riotMap, profileRow);
+
   // El componente que más pesa. Se espera de verdad antes de calcular: si se
   // colaba un render sin standings, la predicción quedaba congelada sin él.
   if (state.standingsPromise) await state.standingsPromise.catch(() => null);
@@ -653,6 +669,10 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   }
   const entryNow = ledger.getEntry(state.gameId) ?? entry;
 
+  // Validación: el sitio corriendo su propio test sobre el corpus indexado.
+  // Se memoiza: puntúa 68 drafts y el partido en vivo se repinta cada 20 s.
+  const validation = state.metaIndex ? cachedValidation() : null;
+
   const diagnostics = collectDiagnostics({
     score,
     champions: [
@@ -660,12 +680,17 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
       ...red.players.map((p) => ({ champion: p.champion, team: red.team })),
     ],
     metaIndex: state.metaIndex,
+    metaBuilding: state.metaBuilding,
+    metaProgress: state.metaProgress,
     champLayers: [...(chLayerA ?? []), ...(chLayerB ?? [])],
     playerLayers: [...(plLayerA ?? []), ...(plLayerB ?? [])],
     prob,
     window: win7,
     patchDiff: state.patchDiff,
+    patchDiffBusy: state.patchDiffBusy,
     entry: entryNow,
+    riot: { available: riotAvailable(), axes: rAxes, cross },
+    validation,
   });
   state.diagnostics = diagnostics;
 
@@ -678,6 +703,8 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     cardDraft(blue, red, lanes, rosterA, rosterB),
     cardIndex(score),
     cardConcentration(edges, axes, blue, red),
+    cardRiot(rAxes, cross, blue, red, riotMap),
+    cardValidation(validation),
     roleGold ? cardRoleGold(roleGold, goldConc, edges, blue, red, minute) : '',
     merged ? cardPlayerDetail(merged, blue, red) : '',
     cardChampionLayer(chLayerA, chLayerB, blue, red),
@@ -693,7 +720,43 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   bindMetaButton();
   bindPatchDiff(blue, red, meta.patchVersion);
   bindMarketAndResult(blue, red);
-  bindDiagnostics([...blue.players, ...red.players]);
+  bindDiagnostics([...blue.players, ...red.players], riotMap);
+
+  // El diff de parche es barato y era un pendiente permanente en el panel. Se
+  // dispara solo la primera vez que se ve este draft.
+  autoPatchDiff(allChamps, meta.patchVersion);
+}
+
+/** Compara el parche sin que haya que pedirlo. Una vez por draft. */
+async function autoPatchDiff(champions, patchVersion) {
+  const key = `${patchVersion}|${[...champions].sort().join(',')}`;
+  if (state.patchDiffKey === key || state.patchDiffBusy) return;
+  state.patchDiffKey = key;
+  state.patchDiffBusy = true;
+  try {
+    state.patchDiff = await diffChampions(champions, patchVersion);
+    if (state.matchId && state.view === 'match') await openMatch(state.matchId, { quiet: true });
+  } catch {
+    state.patchDiff = null;
+    state.patchDiffKey = null;
+  } finally {
+    state.patchDiffBusy = false;
+  }
+}
+
+/**
+ * Validación memoizada. La clave incluye la marca de construcción de cada índice,
+ * así que reindexar la invalida sola y cualquier otra cosa la reutiliza.
+ */
+let validationCache = null;
+function cachedValidation() {
+  const all = cachedIndices();
+  const key = all.map((i) => `${i.tournamentId}:${i.builtAt}`).sort().join('|');
+  if (validationCache?.key === key) return validationCache.value;
+  const v = all.length > 1 ? validateAcross(all) : validateIndex(state.metaIndex);
+  const value = { ...v, read: readValidation(v) };
+  validationCache = { key, value };
+  return value;
 }
 
 /** Para un mapa terminado pedimos un frame bien tardío para agarrar el estado final. */
@@ -851,31 +914,48 @@ function cardDiagnostics(d) {
        que un dato ausente.</div>
      ${rows}
      <div class="index-foot">
+       ${d.items.some((i) => i.action && ['indexar', 'reindexar', 'comparar-parche'].includes(i.action.id))
+         ? '<button class="btn btn-sm" id="fix-all">Resolver todo lo automatizable</button>' : ''}
        <button class="btn btn-sm btn-outline" data-diag="abrir-editor">Clasificar campeones</button>
        <button class="btn btn-sm btn-outline" data-diag="indexar-mas">Indexar otra liga</button>
-       <span class="muted-xs">Las dos acciones que más huecos cierran: puntuar lo que la tabla no
-         tiene, y sumar muestra de otro torneo cuando el n local no alcanza.</span>
-     </div>`,
+       <span class="muted-xs">Lo que se puede resolver sin vos se resuelve de una; puntuar un
+         campeón y cargar una cuota no, y por eso quedan señalados en vez de simulados.</span>
+     </div>
+     ${state.fixAll ? `<div class="note note-ok">Se ejecutaron ${state.fixAll.ran} acciones automáticas
+       ${esc(new Date(state.fixAll.at).toLocaleTimeString('es'))}.
+       ${state.fixAll.manual
+         ? `Quedan ${state.fixAll.manual} que dependen de una decisión tuya y el sitio no va a tomar por vos.`
+         : 'No quedó nada automatizable pendiente.'}</div>` : ''}`,
     { open: d.counts.bloqueante > 0 }
   );
 }
 
 /** Editor de arquetipos: la salida para los campeones que no están en ninguna tabla. */
-function championEditor(champions) {
+function championEditor(champions, riotMap) {
   const rows = champions.map((c) => {
     const src = classificationOf(c);
     const prof = profileRow(c) ?? {};
+    const riot = profileFor(riotMap, c);
+    const sug = !src && riot ? suggestArchetype(riot) : null;
+    const start = prof.fl != null ? prof : sug ?? {};
     const inputs = AXES.map((a) => `
       <label class="ax-in"><span>${a}</span>
         <input type="number" min="0" max="3" step="1" data-ax="${a}" data-champ="${esc(c)}"
-               value="${prof[a] ?? 0}"></label>`).join('');
+               value="${start[a] ?? 0}"></label>`).join('');
+    const riotLine = riot
+      ? `<div class="muted-xs">Riot: ${esc((riot.roles ?? []).join('/') || 'sin clase')} ·
+         ${riot.attackType === 'ranged' ? 'a distancia' : 'cuerpo a cuerpo'} ·
+         daño ${esc(riot.damageType ?? '?')} · cc ${riot.crowdControl} · dur ${riot.durability} ·
+         mov ${riot.mobility}</div>`
+      : '';
     return `
       <div class="editor-row">
         <div class="editor-champ">
           ${championIcon(c) ? `<img src="${esc(championIcon(c))}" alt="" loading="lazy">` : ''}
           <div>
             <strong>${esc(championName(c))}</strong>
-            <div class="muted-xs">${src ? `origen: ${esc(src)}` : 'sin clasificar — cuenta cero en los cinco ejes'}</div>
+            <div class="muted-xs">${src ? `origen: ${esc(src)}` : 'sin clasificar — hoy cuenta cero en los cinco ejes'}</div>
+            ${riotLine}
           </div>
         </div>
         <div class="editor-axes">${inputs}</div>
@@ -883,7 +963,8 @@ function championEditor(champions) {
           <button class="btn btn-sm" data-save-champ="${esc(c)}">Guardar</button>
           ${src === 'manual' ? `<button class="btn btn-sm btn-outline" data-reset-champ="${esc(c)}">Volver a la tabla</button>` : ''}
         </div>
-      </div>`;
+      </div>
+      ${sug ? `<div class="sug">Punto de partida propuesto arriba. ${esc(sug.basis)}</div>` : ''}`;
   }).join('');
 
   return `
@@ -1217,6 +1298,186 @@ function cardConcentration(edges, axes, blue, red) {
 }
 
 const fmt = (v) => (v === null || v === undefined ? '—' : typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v);
+
+const KIND_TAG = {
+  hecho: '<span class="kind kind-fact">hecho</span>',
+  proxy: '<span class="kind kind-proxy">proxy</span>',
+};
+
+/**
+ * Segunda fuente. Lo importante de esta tarjeta no es que agregue ejes: es que
+ * por primera vez hay algo con qué contrastar la tabla de juicio propio.
+ */
+function cardRiot(rAxes, cross, blue, red, riotMap) {
+  if (!rAxes.available) {
+    return collapsible(
+      'riot', 'Segunda fuente', 'datos de campeón publicados por Riot',
+      `<div class="note note-warn">No se pudieron cargar los perfiles de Community Dragon para este
+         draft. Los ejes de abajo quedan sin medir; los del Paso 2 vuelven a ser lectura humana.</div>`
+    );
+  }
+
+  const rows = rAxes.axes.map((ax) => `
+    <div class="row">
+      <span class="row-label">${esc(ax.label)} ${KIND_TAG[ax.kind] ?? ''}
+        ${ax.favors ? `<span class="badge badge-blue">${esc(ax.favors)}</span>` : ''}</span>
+      <span class="row-val">${esc(blue.team)} ${esc(String(ax.a))} · ${esc(red.team)} ${esc(String(ax.b))}<br>
+        <span class="muted-xs">${esc(ax.unit)}</span></span>
+    </div>
+    ${ax.note ? `<div class="muted-xs" style="padding:0 0 8px">${esc(ax.note)}</div>` : ''}`).join('');
+
+  const dis = cross.disagreements;
+  const crossHtml = cross.rows.length
+    ? `<div class="cross">
+        <div class="cross-head">Contraste con la tabla congelada
+          <span class="muted-xs">${(cross.agreement * 100).toFixed(0)}% de acuerdo en ${cross.rows.length} campeones</span></div>
+        ${dis.length
+          ? dis.map((r) => `<div class="cross-row">
+              <strong>${esc(championName(r.champion))}</strong>
+              <span class="muted-xs">frontline propio ${r.fl} · durabilidad de Riot ${r.durability}
+                · clases ${esc(r.roles.join('/') || '—')}</span>
+            </div>`).join('')
+          : '<div class="muted-xs">Ninguna discrepancia fuerte: las dos fuentes coinciden en quién aguanta.</div>'}
+        <div class="note">Comparar el eje <code>fl</code> (juicio propio) contra <code>durability</code>
+          (Riot) es lo más cerca que llega el sitio a auditar su propia tabla. Una discrepancia de 2 o
+          más puntos significa una de dos cosas: la tabla tiene un error, o el campeón cambió de rol
+          desde que se escribió. No se corrige solo — se muestra.</div>
+      </div>`
+    : '';
+
+  const perChamp = [...blue.players, ...red.players].map((p) => {
+    const r = profileFor(riotMap, p.champion);
+    if (!r) return '';
+    return `<div class="riot-chip" title="${esc(p.champion)}">
+        ${championIcon(p.champion) ? `<img src="${esc(championIcon(p.champion))}" alt="" loading="lazy">` : ''}
+        <span class="muted-xs">${r.attackType === 'ranged' ? 'dist.' : 'c.a.c.'} ·
+          ${r.damageType === 'physical' ? 'fís' : r.damageType === 'magic' ? 'mág' : 'mix'} ·
+          cc ${r.crowdControl} · dur ${r.durability} · mov ${r.mobility}</span>
+      </div>`;
+  }).join('');
+
+  return collapsible(
+    'riot',
+    'Segunda fuente',
+    `Community Dragon · ${rAxes.coverage.a + rAxes.coverage.b} de 10 campeones cubiertos`,
+    `<div class="note note-ok">Estos ejes no salen de la tabla de juicio: son los que <strong>Riot
+       publica por campeón</strong> en los datos del cliente. Sirven para dos cosas — medir parte del
+       Paso 2 que hasta ahora se declaraba no computable, y tener por primera vez una fuente
+       independiente contra la cual contrastar la tabla propia.</div>
+     ${rows}
+     <div class="riot-chips">${perChamp}</div>
+     ${crossHtml}`,
+    { open: true }
+  );
+}
+
+/** El sitio corriendo su propio test sobre el corpus que indexó. */
+function cardValidation(v) {
+  if (!v) {
+    return collapsible(
+      'validacion', 'Validación del índice', 'requiere corpus indexado',
+      `<div class="note">Sin índice de torneo no hay corpus con el que testear nada. El 74% de la
+         banda grande queda como cita del backtest original, sin poder reproducirse acá.</div>`
+    );
+  }
+  if (!v.usable) {
+    return collapsible(
+      'validacion', 'Validación del índice', 'sin corpus suficiente',
+      `<div class="note note-warn">${esc(v.reason)}</div>`
+    );
+  }
+
+  const bandRow = (key, label) => {
+    const b = v.byBand[key];
+    if (!b || !b.n) return `<div class="row"><span class="row-label">${label}</span>
+      <span class="row-val muted-xs">sin casos en el corpus</span></div>`;
+    return `
+      <div class="row">
+        <span class="row-label">${label}</span>
+        <span class="row-val">${b.hits}/${b.n} · <strong>${(b.p * 100).toFixed(0)}%</strong>
+          <br><span class="muted-xs">IC95 [${(b.low * 100).toFixed(0)}, ${(b.high * 100).toFixed(0)}]${
+            b.straddles ? ' — cruza el 50%, no distingue' : ''}</span></span>
+      </div>
+      ${wrBar(b)}`;
+  };
+
+  const verdictCls = { 'se sostiene': 'note-ok', 'no distingue': 'note-warn',
+    'apunta al lado contrario': 'note-warn' }[v.read.verdict] ?? '';
+
+  return collapsible(
+    'validacion',
+    'Validación del índice',
+    `${v.n} mapas del corpus · ${esc(v.tournament ?? '')}`,
+    `<div class="note ${verdictCls}"><strong>${esc(v.read.verdict)}.</strong> ${esc(v.read.text)}</div>
+
+     <div class="muted-xs" style="margin:14px 0 6px">¿Gana el lado que el índice favorece?
+       <strong>Régimen limpio</strong>, ${v.nClean} de ${v.n} mapas — al menos una de las dos comps
+       por encima del promedio de la referencia en teamfight.</div>
+     ${bandRow('strong', 'Banda grande (|Δ| &gt; 1 sd)')}
+     ${bandRow('weak', 'Banda media (0.5 – 1 sd)')}
+     ${bandRow('coin', 'Banda chica (&lt; 0.5 sd)')}
+     ${v.overall ? `<div class="muted-xs">Sobre todo el régimen limpio, sin separar por banda:
+       ${v.overall.hits}/${v.overall.n} (${(v.overall.p * 100).toFixed(0)}%). Mezcla los drafts
+       parejos, donde el propio método dice que no hay que usar el índice, así que es contexto y no
+       resultado.</div>` : ''}
+
+     ${v.nDirty ? `
+       <div class="muted-xs" style="margin:16px 0 6px">Fuera de régimen (${v.nDirty} mapas con las dos
+         comps por debajo del promedio). Acá el propio método avisa que el hallazgo no es limpio,
+         así que funciona de control.</div>
+       <div class="row"><span class="row-label">Banda grande, fuera de régimen</span>
+         <span class="row-val">${v.byBandDirty?.strong?.n
+           ? `${v.byBandDirty.strong.hits}/${v.byBandDirty.strong.n} · ${(v.byBandDirty.strong.p * 100).toFixed(0)}%`
+           : 'sin casos'}</span></div>
+       ${v.byBandDirty?.strong?.n && v.byBand?.strong?.n
+         ? `<div class="muted-xs">${v.byBandDirty.strong.p < (v.byBand.strong.p ?? 0)
+             ? 'Peor que dentro del régimen, que es lo que la advertencia predice: separar por régimen no es una excusa, tiene contenido.'
+             : 'No es peor que dentro del régimen. Con estos n no dice mucho, pero si se sostiene, la advertencia de régimen no está capturando lo que dice capturar.'}</div>`
+         : ''}
+     ` : ''}
+     ${v.overallAll ? `<div class="muted-xs" style="margin-top:8px">Sin filtrar por régimen, todos los
+       mapas: ${v.overallAll.hits}/${v.overallAll.n} (${(v.overallAll.p * 100).toFixed(0)}%).</div>` : ''}
+
+     ${v.longGames ? `
+       <div class="muted-xs" style="margin:16px 0 6px">¿El eje de escalado predice las partidas largas?
+         (mediana del corpus: ${v.longGames.median.toFixed(1)} min)</div>
+       <div class="row"><span class="row-label">Mapas largos</span>
+         <span class="row-val">${v.longGames.hits}/${v.longGames.n} ·
+           <strong>${(v.longGames.p * 100).toFixed(0)}%</strong><br>
+           <span class="muted-xs">IC95 [${(v.longGames.low * 100).toFixed(0)}, ${(v.longGames.high * 100).toFixed(0)}]${
+             v.longGames.straddles ? ' — no distingue' : ''}</span></span></div>
+       ${v.shortGames ? `<div class="row"><span class="row-label">Mapas cortos</span>
+         <span class="row-val">${v.shortGames.hits}/${v.shortGames.n} ·
+           ${(v.shortGames.p * 100).toFixed(0)}%<br>
+           <span class="muted-xs">control: acá el escalado NO debería predecir</span></span></div>` : ''}
+     ` : ''}
+
+     ${v.side ? `
+       <div class="muted-xs" style="margin:16px 0 6px">Control de sanidad del resolutor de ganadores</div>
+       <div class="row"><span class="row-label">Winrate del lado azul</span>
+         <span class="row-val">${(v.side.p * 100).toFixed(0)}% en ${v.side.n} mapas<br>
+           <span class="muted-xs">IC95 [${(v.side.low * 100).toFixed(0)}, ${(v.side.high * 100).toFixed(0)}]</span></span></div>
+       <div class="note ${v.sideSane ? 'note-ok' : 'note-warn'}">
+         ${v.sideSane
+           ? 'Cae donde tiene que caer para LoL profesional (el azul suele estar entre 50% y 58%). Esto no valida el índice: valida que el ganador inferido de cada mapa no está sesgado hacia un lado.'
+           : 'Está fuera del rango esperable para LoL profesional. Eso apunta a que la inferencia de ganadores tiene un sesgo por lado, y si es así todo lo de arriba queda en duda. Vale la pena reindexar y volver a mirar.'}
+       </div>` : ''}
+
+     <div class="note">
+       <strong>Qué testea esto y qué no.</strong> La muestra es nueva — el backtest original no vio
+       estos mapas — pero la <strong>tabla de arquetipos es la misma</strong>: esto mide si la regla
+       se sostiene, no si la tabla describe bien a los campeones. Tampoco es el backtest original
+       reejecutado: aquel corría sobre datos de Oracle's Elixir con su propia selección de partidos,
+       y esta es una reimplementación sobre otro corpus. Una diferencia entre los dos números puede
+       venir de la regla, del meta, de la liga o del método de selección, y con estos n no se pueden
+       separar. Además el corpus sale del ganador que infiere el sitio: si esa inferencia se
+       equivocara de forma sistemática se llevaría puesta la validación entera, y por eso está el
+       control de sanidad de arriba.
+       ${v.patches?.length ? `Parches en el corpus: ${esc(v.patches.join(', '))}.` : ''}
+     </div>`,
+    { open: true }
+  );
+}
 
 /** Barra de winrate con su IC95 dibujado, para que el intervalo se vea. */
 function wrBar(ci) {
@@ -1901,34 +2162,69 @@ async function runMetaIndex(btn, { force = false } = {}) {
  * diagnóstico: cada hueco con su acción
  * ------------------------------------------------------------------ */
 
-function bindDiagnostics(players) {
+function bindDiagnostics(players, riotMap) {
+  const run = (id) => {
+    if (id === 'indexar' || id === 'reindexar') {
+      const target = document.getElementById('build-meta') ?? document.getElementById('rebuild-meta');
+      if (state.tournament?.id) {
+        // Un intento fallido no puede dejar el auto-indexado bloqueado para siempre.
+        state.autoIndexTried.delete(state.tournament.id);
+        if (id === 'reindexar') clearIndexCache(state.tournament.id);
+      }
+      return runMetaIndex(target, { force: id === 'reindexar' });
+    }
+    if (id === 'indexar-mas') return openLeaguePicker();
+    if (id === 'abrir-editor') return openChampionEditor(players, riotMap);
+    if (id === 'comparar-parche') return document.getElementById('patch-diff')?.click();
+    if (id === 'cargar-precio') {
+      const input = document.getElementById('odds-a');
+      input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      input?.focus();
+      return undefined;
+    }
+    return undefined;
+  };
+
   document.querySelectorAll('[data-diag]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const id = b.dataset.diag;
-      if (id === 'indexar' || id === 'reindexar') {
-        const target = document.getElementById('build-meta') ?? document.getElementById('rebuild-meta');
-        if (id === 'reindexar' && state.tournament?.id) clearIndexCache(state.tournament.id);
-        runMetaIndex(target, { force: id === 'reindexar' });
-        return;
-      }
-      if (id === 'indexar-mas') { openLeaguePicker(); return; }
-      if (id === 'abrir-editor') { openChampionEditor(players); return; }
-      if (id === 'comparar-parche') { document.getElementById('patch-diff')?.click(); return; }
-      if (id === 'cargar-precio') {
-        const input = document.getElementById('odds-a');
-        input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        input?.focus();
-      }
-    })
+    b.addEventListener('click', () => run(b.dataset.diag))
   );
+
+  // Resolver todo: ejecuta cada acción pendiente en orden, sin que haya que ir
+  // ítem por ítem. Lo que no se puede automatizar (cargar una cuota, puntuar un
+  // campeón) queda señalado al final en vez de simularse.
+  document.getElementById('fix-all')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const ids = [...new Set(
+      [...document.querySelectorAll('[data-diag]')].map((b) => b.dataset.diag)
+    )].filter((id) => id === 'indexar' || id === 'reindexar' || id === 'comparar-parche' || id === 'indexar-mas');
+
+    const manual = state.diagnostics?.items.filter(
+      (i) => i.action && ['abrir-editor', 'cargar-precio'].includes(i.action.id)
+    ) ?? [];
+
+    for (const id of ids) {
+      if (id === 'indexar-mas') continue; // abre un diálogo: no va en una cadena automática
+      btn.textContent = id === 'comparar-parche' ? 'Comparando parche…' : 'Indexando torneo…';
+      try { await run(id); } catch { /* seguimos con el resto */ }
+    }
+    // El panel se rearma solo al terminar, así que el estado del botón se pierde.
+    // La confirmación se guarda aparte para que quede visible después del repintado.
+    state.fixAll = { at: Date.now(), ran: ids.filter((i) => i !== 'indexar-mas').length, manual: manual.length };
+    btn.textContent = manual.length
+      ? `Quedan ${manual.length} que dependen de vos`
+      : 'Todo lo automatizable, hecho';
+    if (state.matchId && state.view === 'match') openMatch(state.matchId, { quiet: true });
+  });
 }
 
 /** Diálogo para puntuar campeones que no están en ninguna tabla. */
-function openChampionEditor(players) {
-  const champs = [...new Set(players.map((p) => p.champion))]
-    .filter((c) => classificationOf(c) !== 'congelado');
-  const list = champs.length ? champs : [...new Set(players.map((p) => p.champion))];
-  openModal('Clasificar campeones', championEditor(list));
+function openChampionEditor(players, riotMap) {
+  const all = [...new Set(players.map((p) => p.champion))];
+  // Primero los que no están clasificados, después los que discrepan con Riot.
+  const priority = all.filter((c) => classificationOf(c) !== 'congelado');
+  const list = priority.length ? [...priority, ...all.filter((c) => !priority.includes(c))] : all;
+  openModal('Clasificar campeones', championEditor(list, riotMap));
 
   document.querySelectorAll('[data-save-champ]').forEach((b) =>
     b.addEventListener('click', () => {

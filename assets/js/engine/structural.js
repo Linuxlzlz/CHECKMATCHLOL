@@ -191,12 +191,25 @@ export function structuralAxes(sideA, sideB) {
  * la ausencia sea visible y el analista los mire a mano, en vez de que el
  * sitio simule haberlos evaluado.
  */
+/**
+ * Ejes del Paso 2 que la tabla congelada NO puede sostener.
+ *
+ * Dejaron de ser una lista fija de imposibles: la segunda fuente (los ejes que
+ * Riot publica por campeón, ver engine/riot-profile.js) cubre tres de los cinco,
+ * dos por proxy y uno como hecho. El `status` dice en qué estado está cada uno,
+ * porque "no computable" y "computable por proxy" no son lo mismo y meterlos en
+ * la misma bolsa era esconder el progreso tanto como esconder el hueco.
+ *
+ *   sin-fuente — no hay dato en ninguna fuente accesible. Lectura humana.
+ *   proxy      — se mide algo parecido, con una fuente de primera mano.
+ *   resuelto   — se cuenta un hecho que no admite discusión.
+ */
 export const NON_COMPUTABLE_AXES = [
-  ['Desenganche', 'La tabla tiene "eng" (inicio) pero no un eje de desenganche. Iniciar contra contra-inicio es un pasivo y eso no se puede leer de acá.'],
-  ['Peel', 'No hay eje de CC duro. Un support con escudos y sin CC no hace peel, y la tabla no los distingue.'],
-  ['Waveclear', 'No está en la tabla. Sin waveclear no hay remontada, pero el índice no lo ve.'],
-  ['Velocidad de objetivo', 'No está en la tabla. Define quién puede tomar el trade.'],
-  ['Neutral a rango', 'Parcialmente cubierto por el eje de poke, pero no es lo mismo.'],
+  ['Desenganche', 'La tabla tiene "eng" (inicio) pero no desenganche. Se aproxima con el CC y la movilidad que publica Riot: sirve para saber si hay herramientas, no si alcanzan.', 'proxy'],
+  ['Peel', 'La tabla no distingue CC duro de escudos. El eje de control de masas de Riot mide cuánto CC tiene el kit, no si se usa para proteger al carry.', 'proxy'],
+  ['Waveclear', 'No está en ninguna fuente accesible. Sin waveclear no hay remontada, y el sitio sigue sin verlo.', 'sin-fuente'],
+  ['Velocidad de objetivo', 'No está en ninguna fuente accesible. Define quién puede tomar el trade.', 'sin-fuente'],
+  ['Neutral a rango', 'Resuelto: cuerpo a cuerpo contra distancia sale del dato de Riot y es un conteo, no un juicio.', 'resuelto'],
 ];
 
 /** Paso 3 — matchups directos, campeón contra campeón por posición. */
