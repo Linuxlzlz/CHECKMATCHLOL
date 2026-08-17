@@ -269,6 +269,13 @@ async function main() {
 
   const added = await wire.tick({ leagues, recordFor: null, backfillHours, matchIds, onlyKind });
   console.log(`Nuevas publicaciones en cola: ${added}`);
+  if (!added && matchIds.length) {
+    console.warn(
+      'No se generó nada para los ids forzados. Puede ser que ya estuvieran en la cola\n' +
+      '(el estado vive en tools/wire-state.json y es idempotente), que el mapa no haya\n' +
+      'terminado todavía si pediste WIRE_ONLY=post, o que el id no exista.'
+    );
+  }
 
   const live = String(process.env.WIRE_LIVE ?? '').toLowerCase() === 'true';
   const maxPerRun = num(process.env.WIRE_MAX_PER_RUN, 4);

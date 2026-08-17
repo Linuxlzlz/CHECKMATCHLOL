@@ -109,6 +109,44 @@ function buildSides(ev, meta, rosterIndex) {
 }
 
 /**
+ * Resuelve un id que puede ser de SERIE o de MAPA.
+ *
+ * El panel del sitio muestra ids de mapa (`{gameId}:post`), así que es lo que uno
+ * tiene a mano al querer probar con un partido puntual — pero getEventDetails
+ * solo entiende ids de serie y con un id de mapa devuelve vacío, sin error. El
+ * resultado era una corrida "exitosa" que no generaba nada y no explicaba por qué.
+ *
+ * La relación está documentada: gameId = matchId + N, con N el número de mapa.
+ * Así que si el id directo no da partido, se prueban los cinco anteriores y se
+ * acepta el que contenga ese mapa.
+ *
+ * Se usa BigInt porque estos ids pasan los 9·10¹⁵ y con Number la resta pierde
+ * precisión.
+ */
+async function resolveMatch(rawId) {
+  const fetchEvent = async (id) => {
+    try {
+      const d = await getEventDetails(id);
+      return d?.data?.event?.match ? d.data.event : null;
+    } catch { return null; }
+  };
+
+  const direct = await fetchEvent(rawId);
+  if (direct) return { matchId: String(rawId), ev: direct, gameId: null };
+
+  let n;
+  try { n = BigInt(String(rawId)); } catch { return null; }
+  for (let back = 1n; back <= 5n; back++) {
+    const candidate = String(n - back);
+    const ev = await fetchEvent(candidate);
+    if (ev && (ev.match.games ?? []).some((g) => String(g.id) === String(rawId))) {
+      return { matchId: candidate, ev, gameId: String(rawId) };
+    }
+  }
+  return null;
+}
+
+/**
  * Una pasada del vigilante. Devuelve cuántas publicaciones nuevas encoló.
  *
  * @param {object} opts.standingsFor  (tournamentId) => standings, para la calidad de equipos
@@ -149,11 +187,10 @@ export async function tick({
   if (!ids.size) return 0;
   const rosterIndex = await getRosterIndex().catch(() => ({}));
 
-  for (const matchId of ids) {
-    let det;
-    try { det = await getEventDetails(matchId); } catch { continue; }
-    const ev = det?.data?.event;
-    if (!ev?.match) continue;
+  for (const rawId of ids) {
+    const resolved = await resolveMatch(rawId);
+    if (!resolved) continue;
+    const { matchId, ev, gameId: forcedGameId } = resolved;
     // La liga sale del propio detalle: así funciona igual venga el partido del
     // feed en vivo, del backfill o de un id pasado a mano.
     const league = LEAGUES.find((l) => l.id === ev.league?.id);
@@ -161,6 +198,8 @@ export async function tick({
 
     for (const game of ev.match.games ?? []) {
       if (game.state === 'unstarted' || game.state === 'unneeded') continue;
+      // Si se pidió por id de MAPA, solo ese mapa.
+      if (forcedGameId && String(game.id) !== forcedGameId) continue;
 
       // --- draft disponible: tweet de arranque ---
       const preId = `${game.id}:pre`;
