@@ -847,6 +847,9 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     finished: game?.state === 'completed',
     corpusTeam,
     draftWeight: draftWeightFrom(validation),
+    // Si hay corpus propio, la ventaja de lado sale de ahí; si no, de la
+    // medición congelada en data/evidence.js.
+    sideRate: validation?.usable && validation.side?.n >= 100 ? validation.side.p : null,
   });
   const stance = bettingStance({ p: prob.p, marketP: null });
 

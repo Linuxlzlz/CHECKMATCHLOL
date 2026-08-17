@@ -24,6 +24,11 @@ import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
 import { buildProbability } from './probability.js';
+import { EVIDENCE } from '../data/evidence.js';
+
+const AXIS_ES_SHORT = {
+  teamfight: 'teamfight', pick: 'pick', split: 'split', siege: 'asedio', scaling: 'escalado',
+};
 import {
   preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
   MVP_CRITERIA,
@@ -280,6 +285,17 @@ export async function tick({
               ? { early: ventana.earlySide, late: ventana.lateSide, from: ventana.from, to: ventana.to }
               : null,
             keyMatchup: keyMatchup(edges, sides.a, sides.b),
+            // Cuánto vale cada eje, medido. Va a la tarjeta para que ninguna
+            // afirmación salga sin su respaldo al lado.
+            evidence: {
+              nota: `Acierto medido de estos ejes sobre ${EVIDENCE.mapas} mapas: ` +
+                Object.entries(EVIDENCE.ejes)
+                  .map(([k, v]) => `${AXIS_ES_SHORT[k] ?? k} ${Math.round(v.p * 100)}%`)
+                  .join(' · '),
+              lado: `Ninguno supera al lado azul, que gana ${Math.round(EVIDENCE.ladoAzul.p * 100)}%.`,
+              escalado: `Escalado acierta ${Math.round(EVIDENCE.escalado.largas * 100)}% en partidas largas ` +
+                `y ${Math.round(EVIDENCE.escalado.cortas * 100)}% en cortas: leelo como lectura, no como pronóstico.`,
+            },
           },
           ...t,
         }, regenerate)) added++;

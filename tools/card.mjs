@@ -266,7 +266,14 @@ export async function preMatchCard(d) {
   // quedar sin ninguna fortaleza aunque ganara ejes.
   ctx.font = 'bold 13px sans-serif';
   ctx.fillStyle = GOLD_DARK;
+  const wCC = trackedWidth(ctx, 'CARA A CARA POR EJE', 2);
   tracked(ctx, 'CARA A CARA POR EJE', 70, 368, 2);
+  // El respaldo, al lado del título y no en una nota al pie que nadie lee.
+  if (d.evidence?.lado) {
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(205,198,182,0.6)';
+    ctx.fillText(d.evidence.lado, 70 + wCC + 20, 368);
+  }
 
   const cx = 640;          // centro de las barras
   const half = 235;        // alcance máximo a cada lado
@@ -337,6 +344,15 @@ export async function preMatchCard(d) {
       `${d.window.early} debe sacar ventaja antes del min ${d.window.from} · ${d.window.late} escala mejor`,
       70 + wl + 16, fy
     );
+    fy += 20;
+    // "Escala mejor" sale de una tabla de juicio que acierta igual en partidas
+    // largas que en cortas. Decirlo al lado cuesta una línea y evita vender
+    // como pronóstico algo que es lectura.
+    if (d.evidence?.escalado) {
+      ctx.font = 'italic 13px sans-serif';
+      ctx.fillStyle = 'rgba(205,198,182,0.6)';
+      ctx.fillText(d.evidence.escalado, 70 + wl + 16, fy);
+    }
     fy += 26;
   }
   if (d.keyMatchup) {
@@ -356,10 +372,18 @@ export async function preMatchCard(d) {
     }
   }
 
+  // Acierto medido de cada eje, al pie. Es la línea que convierte la tarjeta de
+  // "esto es así" en "esto es lo que vale saber esto".
+  if (d.evidence?.nota) {
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(120,90,40,0.95)';
+    ctx.fillText(d.evidence.nota.slice(0, 118), 70, H_PRE - 42);
+  }
+
   ctx.font = '15px sans-serif';
   ctx.fillStyle = GOLD_DARK;
   ctx.textAlign = 'right';
-  tracked(ctx, 'CHECKMATCH LOL', W - 250, H_PRE - 42, 3);
+  tracked(ctx, 'CHECKMATCH LOL', W - 250, H_PRE - 68, 3);
   ctx.textAlign = 'left';
   return canvas.toBuffer('image/png');
 }

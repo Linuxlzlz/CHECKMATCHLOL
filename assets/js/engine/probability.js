@@ -11,6 +11,8 @@
  * estimador que este número.
  */
 
+import { EVIDENCE } from '../data/evidence.js';
+
 const logit = (p) => Math.log(p / (1 - p));
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
 
@@ -82,10 +84,33 @@ export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
  */
 export function buildProbability({
   recordA, recordB, tfDelta, goldDiff, minute, finished = false,
-  corpusTeam = null, draftWeight = null,
+  corpusTeam = null, draftWeight = null, sideRate = null,
 }) {
   const components = [];
   let x = logit(0.5); // 0
+
+  // 0. Ventaja de lado.
+  //
+  // El modelo arrancaba en 50-50 e ignoraba el lado, cuando el lado resultó ser
+  // el predictor MÁS FUERTE de todo el corpus: el azul gana 57% (n=414, IC95
+  // [52, 62]), y le gana a los cinco ejes del índice juntos. Empezar en 50-50
+  // era descartar gratis la única señal sólida que hay antes del primer minuto.
+  const sr = sideRate ?? EVIDENCE.ladoAzul.p;
+  if (sr && sr !== 0.5) {
+    const contrib = logit(sr);
+    x += contrib;
+    components.push({
+      id: 'side',
+      label: 'Ventaja de lado azul',
+      detail: sideRate
+        ? `${(sr * 100).toFixed(0)}% medido en el corpus indexado`
+        : `${(sr * 100).toFixed(0)}% sobre ${EVIDENCE.ladoAzul.n} mapas (medido el ${EVIDENCE.medidoEl})`,
+      contrib,
+      note:
+        'El predictor más sólido que apareció: su intervalo no toca el 50%, cosa que ' +
+        'ninguno de los cinco ejes del índice logra.',
+    });
+  }
 
   // 1. Calidad de los equipos.
   const wr = (r) => (r && r.wins + r.losses > 0 ? r.wins / (r.wins + r.losses) : null);

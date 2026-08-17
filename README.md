@@ -208,6 +208,18 @@ Tres respuestas, y ninguna es la que uno querría:
   base son las de campeón. No es que los campeones no importen: es que con 421 mapas el winrate por
   campeón es mayormente ruido, y meterlo al modelo mete el ruido.
 
+### La ventaja de lado, que el modelo estaba tirando a la basura
+
+El predictor más fuerte de todo el corpus no es ningún eje del draft: es **de qué lado juega cada
+equipo**. El azul gana **57%** (n=414, IC95 [52, 62]), y es el único cuyo intervalo no toca el 50% —
+cosa que ninguno de los cinco ejes del índice logra.
+
+El modelo arrancaba en 50-50 e ignoraba el lado por completo. Eso era descartar gratis la única
+señal sólida disponible antes del primer minuto. Ahora entra como componente propio, tomado del
+corpus indexado si hay, o de la medición congelada en `data/evidence.js` si no.
+
+Con dos equipos idénticos y draft parejo, el número pasó de 50% a **57% para el azul**.
+
 Ese hallazgo cambió el modelo: **el peso del componente de draft ahora lo fija la medición.** Si la
 banda grande cruza el 50% con n≥60, entra en cero, y el desglose de la Lectura lo dice con el número
 que lo justifica. No está clavado: vuelve solo si un corpus futuro muestra que el índice separa.
