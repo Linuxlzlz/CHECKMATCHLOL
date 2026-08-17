@@ -15,8 +15,21 @@
 
 export const EVIDENCE = {
   medidoEl: '2026-08-17',
-  mapas: 414,
+  mapas: 2066,
+  series: 867,
   ligas: ['LCK', 'LCK CL', 'LPL', 'LEC', 'LCS', 'CBLOL'],
+
+  /**
+   * El corpus pasó de 414 a 2066 mapas al indexar tres splits por liga en vez
+   * de solo el vigente. No es un detalle de tamaño: cambió conclusiones.
+   *
+   * Con 414 mapas, el récord de equipo medido por liga daba LPL 74% (la
+   * estrella) y LCK 39% (predecía al revés). Con 2066, LPL quedó ÚLTIMO con
+   * 61% y LCK subió a 68%. Las dos cosas eran ruido, y la muestra grande las
+   * deshizo. Vale como recordatorio de qué tan poco pesa un ranking armado
+   * sobre 23 series.
+   */
+  corpusAnterior: { mapas: 414, series: 142, nota: 'solo el split vigente por liga' },
 
   /**
    * La ventaja de lado azul. Estuvo mal medida y acá está la corrección.
@@ -39,9 +52,14 @@ export const EVIDENCE = {
    * Aporta ~1 punto y está bien que aporte ~1 punto.
    */
   ladoAzul: {
-    p: 0.509, n: 175, low: 0.436, high: 0.582, solido: false,
-    global: { p: 0.570, n: 414, nota: 'confundido con el sorteo del mapa 2, no usar' },
-    porMapa: { 1: { p: 0.509, n: 175 }, 2: { p: 0.659, n: 170 }, 3: { p: 0.507, n: 69 } },
+    p: 0.517, n: 867, low: 0.483, high: 0.550, solido: false,
+    global: { p: 0.547, n: 2066, nota: 'confundido con el sorteo del mapa 2, no usar' },
+    porMapa: {
+      1: { p: 0.517, n: 867, low: 0.483, high: 0.550 },
+      2: { p: 0.597, n: 752, low: 0.562, high: 0.632 },
+      3: { p: 0.531, n: 360, low: 0.479, high: 0.582 },
+      4: { p: 0.475, n: 59, low: 0.353, high: 0.600 },
+    },
     azulEsGanadorDelMapa1: { p: 0.876, n: 170 },
   },
 
@@ -74,9 +92,32 @@ export const EVIDENCE = {
    * llegar a apostar por él.
    */
   record: {
-    base: { brier: 0.2500, n: 142, nota: 'predecir 50-50' },
-    conRecord: { brier: 0.2268, peso: 3.5, prior: { k: 4, c: 4 } },
-    optimo: { peso: 5.0, brier: 0.2248 },
+    /**
+     * Prueba FUERA DE MUESTRA sobre el corpus grande: se elige el peso con las
+     * 583 series viejas y se evalúa con las 250 nuevas, que el modelo no vio.
+     * Es el único componente del sitio que pasa esta prueba.
+     */
+    base: { brier: 0.2500, n: 250, nota: 'predecir 50-50' },
+    conRecord: { brier: 0.2146, acierto: 0.68, low: 0.62, high: 0.73, peso: 3.5, prior: { k: 4, c: 4 } },
+    optimo: { peso: 5.0, brier: 0.2134 },
+    seriesUsables: 833,
+
+    /**
+     * Por liga, sobre el corpus entero. Las seis separan del 50%, cosa que con
+     * el corpus chico no pasaba en ninguna salvo LPL.
+     *
+     * Comparar con lo que decían las mismas ligas medidas sobre 142 series:
+     * LPL daba 74% (el mejor) y ahora da 61% (el peor); LCK daba 39% —predecía
+     * al revés— y ahora da 68%. Ninguna de las dos diferencias era real.
+     */
+    porLiga: {
+      LCS: { n: 69, gana: 0.0508, acierto: 0.67, low: 0.55, high: 0.77 },
+      'LCK CL': { n: 156, gana: 0.0402, acierto: 0.69, low: 0.62, high: 0.76 },
+      LCK: { n: 159, gana: 0.0393, acierto: 0.68, low: 0.60, high: 0.75 },
+      LEC: { n: 155, gana: 0.0268, acierto: 0.65, low: 0.57, high: 0.72 },
+      LPL: { n: 200, gana: 0.0178, acierto: 0.61, low: 0.54, high: 0.67 },
+      CBLOL: { n: 94, gana: 0.0175, acierto: 0.63, low: 0.53, high: 0.72 },
+    },
 
     /**
      * Por qué el winrate entra suavizado y no crudo.
@@ -122,14 +163,34 @@ export const EVIDENCE = {
     unidad: 'series',
   },
 
-  /** Acierto de cada eje del índice, cara a cara. */
+  /**
+   * Acierto de cada eje del índice, cara a cara, sobre el corpus grande.
+   *
+   * Pick (52.2%) y escalado (52.6%) rozan el umbral, pero con cinco ejes
+   * probados ninguno sobrevive la corrección por comparaciones múltiples. El
+   * peso del draft sigue en cero, ahora por medición ajustada y no por falta
+   * de muestra.
+   */
   ejes: {
-    teamfight: { p: 0.50, n: 400, low: 0.45, high: 0.55 },
-    pick: { p: 0.52, n: 391, low: 0.47, high: 0.57 },
-    split: { p: 0.50, n: 323, low: 0.45, high: 0.56 },
-    siege: { p: 0.49, n: 354, low: 0.43, high: 0.54 },
-    scaling: { p: 0.54, n: 330, low: 0.49, high: 0.59 },
+    teamfight: { p: 0.500, n: 1993, low: 0.478, high: 0.522 },
+    pick: { p: 0.522, n: 1947, low: 0.500, high: 0.544 },
+    split: { p: 0.490, n: 1610, low: 0.466, high: 0.514 },
+    siege: { p: 0.482, n: 1746, low: 0.458, high: 0.505 },
+    scaling: { p: 0.526, n: 1701, low: 0.502, high: 0.549 },
   },
+
+  /**
+   * La afirmación que originó todo este sitio, ya sin margen de duda.
+   *
+   * El backtest original decía que con Δ de teamfight ≥ 1 sd —la "banda
+   * grande"— el índice acertaba 74% (n=31, IC [57, 86]). Sobre 1256 mapas de
+   * banda grande acierta 49.4%, con el intervalo entero por debajo del 53%.
+   *
+   * Con 218 mapas esto era "no alcanza la muestra". Con 1256 y este intervalo,
+   * ya no: la regla no separa ganadores. Queda como lectura del draft, que es
+   * para lo que sirve, y no como pronóstico.
+   */
+  bandaGrande: { p: 0.494, n: 1256, low: 0.467, high: 0.522, afirmacionOriginal: 0.74 },
 
   /**
    * El test que define si el eje de escalado mide lo que dice medir: tendría que
