@@ -171,7 +171,10 @@ function resolveLeagues(raw, LEAGUES) {
   const wanted = String(raw ?? '')
     .split(',').map((s) => s.trim()).filter(Boolean);
 
-  const all = ['todas', 'todos', 'all', '*'];
+  // Los valores que la documentación usa como marcador de "sin filtro" terminan
+  // cargados como si fueran un valor real. Ya pasó con "todas" y con "Default",
+  // así que se aceptan todos en vez de fallar por un malentendido de la tabla.
+  const all = ['todas', 'todos', 'all', '*', 'default', 'defecto', 'ninguna', '-'];
   if (!wanted.length || wanted.some((w) => all.includes(w.toLowerCase()))) return LEAGUES;
 
   const known = new Map(LEAGUES.map((l) => [l.key.toUpperCase(), l]));
@@ -245,13 +248,15 @@ async function main() {
   const wire = await import('../assets/js/engine/wire.js');
   const { LEAGUES } = await import('../assets/js/api.js');
 
-  const leagues = resolveLeagues(process.env.WIRE_LEAGUES, LEAGUES);
-
   // Para PROBAR hace falta alcanzar un partido que ya terminó: en operación
   // normal el vigilante solo ve lo que está en vivo, y cuando el evento sale del
   // feed en vivo ese mapa queda fuera de alcance para siempre.
   const backfillHours = num(process.env.WIRE_BACKFILL, 0);
   const matchIds = (process.env.WIRE_MATCH ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+  // Con partidos forzados la liga no filtra nada, así que no tiene sentido que un
+  // WIRE_LEAGUES mal escrito haga fallar una prueba que no lo usa.
+  const leagues = matchIds.length ? LEAGUES : resolveLeagues(process.env.WIRE_LEAGUES, LEAGUES);
   const onlyKind = (process.env.WIRE_ONLY ?? '').trim().toLowerCase() || null;
   if (onlyKind && !['pre', 'post'].includes(onlyKind)) {
     throw new Error(`WIRE_ONLY="${onlyKind}" no vale. Usá "pre", "post", o dejala vacía.`);
