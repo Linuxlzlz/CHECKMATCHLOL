@@ -308,7 +308,22 @@ async function deliverFree(pending) {
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
   const tgChat = process.env.TELEGRAM_CHAT_ID;
   const discord = process.env.DISCORD_WEBHOOK;
-  if (!((tgToken && tgChat) || discord)) return 0;
+
+  if (!((tgToken && tgChat) || discord)) {
+    // Callarse acá es el peor comportamiento posible: el bot parece funcionar,
+    // no entrega nada y no dice por qué.
+    if (pending.length) {
+      console.warn(
+        `\nHay ${pending.length} publicación(es) lista(s) y NINGÚN canal de entrega configurado.\n` +
+        'Falta DISCORD_WEBHOOK (o TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) en\n' +
+        'Settings -> Secrets and variables -> Actions -> pestaña SECRETS.\n' +
+        'Ojo: tienen que estar en Secrets, no en Variables. El workflow los lee de\n' +
+        'secrets.* y puestos en Variables llegan vacíos.'
+      );
+    }
+    return 0;
+  }
+  console.log(`Canales: ${[discord && 'Discord', tgToken && tgChat && 'Telegram'].filter(Boolean).join(' + ')}`);
 
   const KEY = 'cml:wire:notified';
   let sent;
