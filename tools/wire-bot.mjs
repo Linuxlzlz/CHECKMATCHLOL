@@ -80,13 +80,9 @@ function authHeader(method, url, queryParams, creds) {
   return `OAuth ${Object.keys(oauth).sort().map((k) => `${enc(k)}="${enc(oauth[k])}"`).join(', ')}`;
 }
 
-/** Sube una imagen remota y devuelve su media_id. */
-async function uploadMedia(url, creds) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`imagen ${res.status}: ${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+/** Sube un buffer y devuelve su media_id. */
+async function uploadBuffer(buf, creds) {
   if (buf.length > 4_800_000) throw new Error('imagen demasiado grande');
-
   const endpoint = 'https://upload.twitter.com/1.1/media/upload.json';
   const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
   const body = Buffer.concat([
@@ -104,25 +100,40 @@ async function uploadMedia(url, creds) {
     body,
   });
   const txt = await r.text();
-  if (!r.ok) throw new Error(`media ${r.status}: ${txt.slice(0, 200)}`);
+  if (!r.ok) throw new Error(`media ${r.status}: ${txt.slice(0, 300)}`);
   return JSON.parse(txt).media_id_string;
 }
+
+/** Sube una imagen remota y devuelve su media_id. */
+async function uploadMedia(url, creds) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`imagen ${res.status}: ${url}`);
+  return uploadBuffer(Buffer.from(await res.arrayBuffer()), creds);
+}
+
+// PNG transparente de 1x1. Sirve de sonda: subirlo no publica nada.
+const PIXEL = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64'
+);
 
 /**
  * Comprueba las credenciales SIN publicar nada.
  *
- * Es la primera corrida que conviene hacer: si la firma OAuth está mal o los
- * tokens se generaron antes de darle permiso de escritura a la app, esto lo dice
- * en dos segundos en vez de descubrirlo con un tweet fallido.
+ * Sube un pixel transparente a media/upload y descarta el media_id. Puede sonar
+ * raro, pero es la comprobación correcta y la primera versión la tenía mal:
+ * usaba GET /2/users/me, que SOLO acepta OAuth 2.0 y devuelve 401 con OAuth 1.0a
+ * aunque las credenciales sean impecables. Estaba probando la puerta equivocada.
+ *
+ * Subir un medio, en cambio, ejercita exactamente lo que hace falta: la firma
+ * OAuth 1.0a y el permiso de ESCRITURA. Un token emitido antes de poner la app en
+ * Read and Write falla acá, que es justo lo que se quiere detectar. Y un medio
+ * que no se adjunta a ningún tweet caduca solo en unas horas: no publica nada ni
+ * queda a la vista de nadie.
  */
 async function verifyCredentials(creds) {
-  const endpoint = 'https://api.twitter.com/2/users/me';
-  const r = await fetch(endpoint, {
-    headers: { Authorization: authHeader('GET', endpoint, {}, creds) },
-  });
-  const txt = await r.text();
-  if (!r.ok) throw new Error(`users/me ${r.status}: ${txt.slice(0, 300)}`);
-  return JSON.parse(txt)?.data;
+  const mediaId = await uploadBuffer(PIXEL, creds);
+  return { mediaId };
 }
 
 async function postTweet(text, mediaIds, creds) {
@@ -199,9 +210,31 @@ function readCreds() {
 async function main() {
   // Modo comprobación: no toca las ligas ni la cola, solo valida las llaves.
   if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
-    const me = await verifyCredentials(readCreds());
-    console.log(`Credenciales OK. Cuenta: @${me?.username} (${me?.name}, id ${me?.id})`);
-    console.log('Poné WIRE_VERIFY en false y WIRE_LIVE en true cuando quieras que publique.');
+    try {
+      const { mediaId } = await verifyCredentials(readCreds());
+      console.log(`Credenciales OK: firma válida y permiso de ESCRITURA confirmado (media_id ${mediaId}).`);
+      console.log('No se publicó nada: el medio queda huérfano y caduca solo.');
+      console.log('Poné WIRE_VERIFY en false para ver simulacros, y WIRE_LIVE en true para publicar.');
+    } catch (e) {
+      console.error(`\nFALLÓ la comprobación: ${e.message}\n`);
+      if (/\b401\b/.test(e.message)) {
+        console.error(
+          'Un 401 es firma o llaves. Lo más común, en orden:\n' +
+          '  1. Las 4 credenciales no son de la MISMA app (API Key de una, Access Token de otra).\n' +
+          '  2. Se copió algún valor con un espacio al principio o al final.\n' +
+          '  3. Se regeneró alguna en el portal y quedó desactualizada en los secrets.'
+        );
+      } else if (/\b403\b/.test(e.message)) {
+        console.error(
+          'Un 403 es permisos. El Access Token se generó ANTES de poner la app en\n' +
+          '"Read and Write". Cambiá el permiso y REGENERÁ el token: el viejo queda de\n' +
+          'solo lectura para siempre.'
+        );
+      } else if (/\b429\b/.test(e.message)) {
+        console.error('Un 429 es cuota agotada. Esperá a que se renueve la ventana.');
+      }
+      process.exitCode = 1;
+    }
     return;
   }
 
