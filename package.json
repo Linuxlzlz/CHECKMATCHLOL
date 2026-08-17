@@ -1,0 +1,9 @@
+{
+  "name": "checkmatchlol-tools",
+  "private": true,
+  "type": "module",
+  "description": "Dependencias del bot de publicación. El SITIO no usa ninguna: es HTML y módulos ES nativos, y se sirve tal cual desde GitHub Pages. Esto existe solo para dibujar la tarjeta de imagen en GitHub Actions.",
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.60"
+  }
+}

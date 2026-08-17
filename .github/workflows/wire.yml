@@ -28,7 +28,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'    # trae fetch global; el bot no usa dependencias
+          node-version: '20'    # trae fetch global
+
+      # Única dependencia del proyecto, y solo del bot: el canvas para dibujar la
+      # tarjeta. Si falla la instalación, el bot sigue y publica sin tarjeta.
+      - name: Instalar el canvas
+        continue-on-error: true
+        run: npm install --no-audit --no-fund
 
       - name: Generar y publicar
         env:
@@ -41,6 +47,7 @@ jobs:
           WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
           WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
           WIRE_MEDIA: ${{ vars.WIRE_MEDIA }}
+          WIRE_CARD: ${{ vars.WIRE_CARD }}
           WIRE_PAUSE_HOURS: ${{ vars.WIRE_PAUSE_HOURS }}
           # Entrega gratuita: el tweet ya armado te llega y lo publicás de un toque.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

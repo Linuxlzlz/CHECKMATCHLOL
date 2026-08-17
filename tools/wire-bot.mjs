@@ -212,29 +212,67 @@ async function postTweet(text, mediaIds, creds) {
 
 const INTENT = (text) => `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
 
-async function sendTelegram(post, token, chatId) {
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const body = {
-    chat_id: chatId,
-    text: `${post.text}\n\n▸ Publicar: ${INTENT(post.text)}`,
-    disable_web_page_preview: false,
-  };
-  const r = await fetch(url, {
+async function sendTelegram(post, token, chatId, card) {
+  const caption = `${post.text}\n\n▸ Publicar: ${INTENT(post.text)}`;
+
+  if (card) {
+    const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
+    const field = (n, v) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${n}"\r\n\r\n${v}\r\n`);
+    const body = Buffer.concat([
+      field('chat_id', chatId),
+      // Telegram corta los pies de foto en 1024: el texto entra cómodo.
+      field('caption', caption.slice(0, 1024)),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="checkmatch.png"\r\nContent-Type: image/png\r\n\r\n`),
+      card,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    if (!r.ok) throw new Error(`telegram ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    return;
+  }
+
+  const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ chat_id: chatId, text: caption }),
   });
   if (!r.ok) throw new Error(`telegram ${r.status}: ${(await r.text()).slice(0, 160)}`);
 }
 
-async function sendDiscord(post, webhook) {
+async function sendDiscord(post, webhook, card) {
+  const payload = {
+    content: `\`\`\`\n${post.text}\n\`\`\`\n[Publicar en X](${INTENT(post.text)})`,
+  };
+
+  // Con tarjeta va como archivo adjunto, que Discord muestra grande. Sin ella,
+  // se cae a los logos sueltos como antes.
+  if (card) {
+    const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(payload)}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="checkmatch.png"\r\nContent-Type: image/png\r\n\r\n`),
+      card,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const r = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    if (!r.ok) throw new Error(`discord ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    return;
+  }
+
+  payload.embeds = (post.media ?? []).filter(Boolean).slice(0, 2).map((u) => ({ image: { url: u } }));
   const r = await fetch(webhook, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      content: `\`\`\`\n${post.text}\n\`\`\`\n[Publicar en X](${INTENT(post.text)})`,
-      embeds: (post.media ?? []).filter(Boolean).slice(0, 2).map((u) => ({ image: { url: u } })),
-    }),
+    body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error(`discord ${r.status}: ${(await r.text()).slice(0, 160)}`);
 }
@@ -245,6 +283,21 @@ async function sendDiscord(post, webhook) {
  * Lleva su propia marca, separada de `posted`: que te haya llegado el aviso no
  * significa que ya esté publicado en X.
  */
+/**
+ * Dibuja la tarjeta si se puede. Nunca tira: una tarjeta que no sale no puede
+ * impedir que salga el análisis, así que el bot sigue con las imágenes sueltas.
+ */
+async function renderCard(post) {
+  if (!post.card || String(process.env.WIRE_CARD ?? 'true').toLowerCase() === 'false') return null;
+  try {
+    const { preMatchCard, postMatchCard } = await import('./card.mjs');
+    return post.card.kind === 'post' ? await postMatchCard(post.card) : await preMatchCard(post.card);
+  } catch (e) {
+    console.warn(`  sin tarjeta (${e.message.slice(0, 90)})`);
+    return null;
+  }
+}
+
 async function deliverFree(pending) {
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
   const tgChat = process.env.TELEGRAM_CHAT_ID;
@@ -259,8 +312,9 @@ async function deliverFree(pending) {
   for (const p of pending) {
     if (sent[p.id]) continue;
     try {
-      if (tgToken && tgChat) await sendTelegram(p, tgToken, tgChat);
-      if (discord) await sendDiscord(p, discord);
+      const card = await renderCard(p);
+      if (tgToken && tgChat) await sendTelegram(p, tgToken, tgChat, card);
+      if (discord) await sendDiscord(p, discord, card);
       sent[p.id] = new Date().toISOString();
       n++;
       console.log(`avisado ${p.id}`);
@@ -528,10 +582,20 @@ async function main() {
   for (const p of pending.slice(0, maxPerRun)) {
     try {
       let mediaIds = [];
-      if (withMedia && p.media?.length) {
-        for (const url of p.media.filter(Boolean).slice(0, 4)) {
-          try { mediaIds.push(await uploadMedia(url, creds)); }
-          catch (e) { console.warn(`  imagen omitida: ${e.message}`); }
+      if (withMedia) {
+        // La tarjeta va primero y sola: lleva los logos, la foto y los números
+        // ya compuestos, así que adjuntar además las imágenes sueltas sería
+        // repetir lo mismo peor y gastar una llamada por cada una.
+        const card = await renderCard(p);
+        if (card) {
+          try { mediaIds.push(await uploadBuffer(card, creds)); }
+          catch (e) { console.warn(`  tarjeta no subida: ${e.message}`); }
+        }
+        if (!mediaIds.length) {
+          for (const url of (p.media ?? []).filter(Boolean).slice(0, 4)) {
+            try { mediaIds.push(await uploadMedia(url, creds)); }
+            catch (e) { console.warn(`  imagen omitida: ${e.message}`); }
+          }
         }
       }
       const res = await postTweet(p.text, mediaIds, creds);

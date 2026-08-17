@@ -236,6 +236,18 @@ export async function tick({
           gameId: game.id, matchId: ev.id ?? matchId, league: league?.key,
           teams: `${sides.a.team} vs ${sides.b.team}`, gameNumber: game.number,
           logos: [sides.a.image, sides.b.image],
+          // Datos para dibujar la tarjeta fuera del navegador.
+          card: {
+            kind: 'pre',
+            league: league?.name, gameNumber: game.number,
+            blue: sides.a.team, red: sides.b.team,
+            blueLogo: sides.a.image, redLogo: sides.b.image,
+            pBlue: prob.p,
+            draftLine: Math.abs(score.tfDelta) >= 0.5
+              ? `Draft: ${score.tfFavors} +${Math.abs(score.tfDelta).toFixed(2)} sd en teamfight`
+              : 'Draft parejo: el índice no elige lado',
+            keyLine: edges?.[0] ? `Clave: ${edges[0].label} (${edges[0].side})` : null,
+          },
           ...t,
         })) added++;
       }
@@ -285,9 +297,23 @@ export async function tick({
             name: mvp.name, champion: mvp.champion, photo: mvp.photo, team: mvp.team,
             kda: `${mvp.kills}/${mvp.deaths}/${mvp.assists}`,
             gold: mvp.gold, damageShare: mvp.shareDamage, killParticipation: mvp.shareKills,
-            rating: mvp.rating, components: mvp.components,
+            rating: mvp.rating, components: mvp.components, bars: mvp.bars,
+            goldVsOpp: mvp.goldVsOpp, opponent: mvp.opponent,
           } : null,
           result: { winner: winner === 'a' ? sides.a.team : sides.b.team, minute },
+          card: {
+            kind: 'post',
+            league: league?.name, gameNumber: game.number, minute,
+            winner: (winner === 'a' ? sides.a : sides.b).team,
+            winnerLogo: (winner === 'a' ? sides.a : sides.b).image,
+            scoreLine: `Kills ${winner === 'a' ? st.a.kills : st.b.kills}-${winner === 'a' ? st.b.kills : st.a.kills}` +
+              ` · oro ${Math.abs(st.a.gold - st.b.gold).toLocaleString('es')} para ${st.a.gold > st.b.gold ? sides.a.team : sides.b.team}`,
+            keyFact,
+            mvp: mvp ? {
+              name: mvp.name.replace(/^\S+\s+/, ''), champion: mvp.champion,
+              team: mvp.team, photo: mvp.photo, rating: mvp.rating, bars: mvp.bars,
+            } : null,
+          },
           ...t,
         })) added++;
       }

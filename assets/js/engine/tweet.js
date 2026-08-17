@@ -97,6 +97,7 @@ export const MVP_WEIGHTS = { damage: 3.4, kills: 2.3, gold: 1.5, kda: 1.9, death
 export function mvpOf(merged, sides, winnerSide) {
   if (!merged) return null;
   const side = winnerSide === 'a' ? merged.a : merged.b;
+  const rival = winnerSide === 'a' ? merged.b : merged.a;
   const team = winnerSide === 'a' ? sides.a : sides.b;
   const rows = side.filter((p) => p.hasDetails);
   if (!rows.length) return null;
@@ -125,6 +126,11 @@ export function mvpOf(merged, sides, winnerSide) {
     // prácticamente inalcanzable y un MVP típico cae entre 6.5 y 8.5.
     const total = (MVP_WEIGHTS.damage + MVP_WEIGHTS.kills + MVP_WEIGHTS.gold + MVP_WEIGHTS.kda) * 1.5;
     const rating = Math.max(0, Math.min(10, (raw / total) * 10));
+    // Contra su rival directo: es la medida de impacto más limpia que hay, porque
+    // compara con quien tuvo el mismo trabajo en el mismo mapa.
+    const opp = rival.find((r) => r.role === p.role) ?? null;
+    const goldVsOpp = opp?.gold != null && p.gold != null ? p.gold - opp.gold : null;
+
     return {
       ...p,
       team: team.team,
@@ -134,6 +140,8 @@ export function mvpOf(merged, sides, winnerSide) {
       shareGold: gold,
       kda,
       rating,
+      opponent: opp ? { champion: opp.champion, name: opp.name, gold: opp.gold } : null,
+      goldVsOpp,
       components: [
         { label: 'Daño del equipo', value: pct(dmg), weight: MVP_WEIGHTS.damage },
         { label: 'Participación en kills', value: pct(kp), weight: MVP_WEIGHTS.kills },
@@ -141,6 +149,22 @@ export function mvpOf(merged, sides, winnerSide) {
         { label: 'KDA', value: kda.toFixed(1), weight: MVP_WEIGHTS.kda },
         { label: 'Penalización por muertes', value: `${p.deaths}`, weight: -MVP_WEIGHTS.deathPenalty },
       ],
+      // Lo que va en la tarjeta: cada eje con su fracción, para que se vea EN QUÉ
+      // se destacó y no solo cuánto sacó en total.
+      bars: [
+        { label: 'Daño del equipo', value: pct(dmg), frac: dmg / 0.45 },
+        { label: 'Participación en kills', value: pct(kp), frac: kp },
+        { label: 'Oro del equipo', value: pct(gold), frac: gold / 0.35 },
+        { label: 'KDA', value: `${p.kills}/${p.deaths}/${p.assists}`, frac: Math.min(1, kda / 10) },
+        goldVsOpp != null
+          ? {
+              label: `Oro sobre ${opp.champion}`,
+              value: `${goldVsOpp >= 0 ? '+' : ''}${goldVsOpp.toLocaleString('es')}`,
+              frac: Math.min(1, Math.abs(goldVsOpp) / 6000),
+              color: goldVsOpp >= 0 ? '#3ecf8e' : '#ff6b6b',
+            }
+          : null,
+      ].filter(Boolean),
     };
   });
 
@@ -230,6 +254,9 @@ export function postMatchTweet(ctx) {
   const mvpLine = mvp
     ? `MVP ${mvp.name.replace(/^\S+\s+/, '')} (${mvp.champion}) ${mvp.kills}/${mvp.deaths}/${mvp.assists} · ${pct(mvp.shareDamage)} del daño · ${mvp.rating.toFixed(1)}/10`
     : null;
+  const oppLine = mvp?.goldVsOpp != null && Math.abs(mvp.goldVsOpp) >= 1500
+    ? `${mvp.goldVsOpp >= 0 ? '+' : ''}${mvp.goldVsOpp.toLocaleString('es')} de oro sobre ${mvp.opponent.champion}`
+    : null;
 
   return {
     kind: 'post',
@@ -238,7 +265,7 @@ export function postMatchTweet(ctx) {
         `✅ Gana ${win.team}${minute ? ` en ${Math.round(minute)} min` : ''}`,
         kills ? `${kills} · oro ${goldTeam} +${goldLead.toLocaleString('es')}` : null,
       ].filter(Boolean),
-      [keyFact, mvpLine],
+      [keyFact, mvpLine, oppLine],
       tags
     ),
     media: [mvp?.photo, win.image].filter(Boolean),
