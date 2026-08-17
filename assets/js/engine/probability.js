@@ -129,7 +129,7 @@ export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
  */
 export function buildProbability({
   recordA, recordB, tfDelta, goldDiff, minute, finished = false,
-  corpusTeam = null, draftWeight = null, sideRate = null,
+  corpusTeam = null, draftWeight = null, sideRate = null, elo = null,
 }) {
   const components = [];
   let x = logit(0.5); // 0
@@ -194,7 +194,33 @@ export function buildProbability({
   const wbCrudo = wrCrudo(recordB);
   const wa = wrSuave(recordA);
   const wb = wrSuave(recordB);
-  if (wa !== null && wb !== null) {
+
+  // 1a. Elo, que cuando está disponible REEMPLAZA al récord en vez de sumarse.
+  //
+  // No es una preferencia de diseño: el ajuste conjunto sobre 261 series fuera
+  // de muestra le da al récord peso CERO cuando el Elo está presente. Los dos
+  // miden fuerza de equipo, y el Elo la mide mejor porque pondera contra quién
+  // jugaste. Sumarlos sería contar lo mismo dos veces — el mismo error que ya
+  // cometimos con la ventaja de lado.
+  const eloDelta = elo?.logOdds ?? null;
+  if (eloDelta !== null) {
+    x += eloDelta;
+    components.push({
+      id: 'elo',
+      label: 'Fuerza de equipo (Elo)',
+      detail:
+        `${Math.round(elo.a?.rating ?? 0)} contra ${Math.round(elo.b?.rating ?? 0)} · ` +
+        `${elo.a?.partidas ?? 0} y ${elo.b?.partidas ?? 0} mapas`,
+      contrib: eloDelta,
+      note:
+        'Medido POR MAPA, que es lo que este número predice: fuera de muestra sobre 570 mapas da ' +
+        'Brier 0.2285 contra 0.2500 de predecir 50-50, con 61% de acierto. Empata con el récord ' +
+        'y se usa igual porque existe sin standings y pondera contra quién jugó cada equipo. ' +
+        'Cuando está, el récord no entra: contarlos a los dos sería la misma fuerza dos veces.',
+    });
+  }
+
+  if (eloDelta === null && wa !== null && wb !== null) {
     const nA = recordA.wins + recordA.losses;
     const nB = recordB.wins + recordB.losses;
     const n = nA + nB;
@@ -209,21 +235,13 @@ export function buildProbability({
     // resultado era amortiguar justo la banda donde el récord mejor funciona.
     //
     // Medido de nuevo en la unidad correcta —récord por serie, calculado solo
-    // con lo anterior, como se usaría en vivo, sobre 142 series del corpus—
-    // contra predecir 50-50:
+    // con lo anterior, como se usaría en vivo, sobre 833 series del corpus—
+    // el récord aporta en todos los tramos de historia, incluso con dos series.
+    // No hay piso que poner: el encogido por n ya hace ese trabajo.
     //
-    //   historia 1-2 series   n=61   Brier 0.2360 vs 0.2500   gana 0.014
-    //   historia 3-5 series   n=62   Brier 0.2179 vs 0.2500   gana 0.032
-    //   historia 6+ series    n=19   Brier 0.2171 vs 0.2500   gana 0.033
-    //
-    // Aporta en los tres tramos, incluso con dos series. Y el barrido de pesos
-    // tiene fondo en 3.4 (0.2223) tanto en el conjunto entero como en el tramo
-    // de historia baja: el peso 2.2 del modelo está del lado conservador, no
-    // pasado. No hay nada que frenar.
-    //
-    // Lo que sí hace falta con muestras chicas ya está: `shrink` encoge por
-    // total de series, así que un 1-0 contra un 0-1 entra a un quinto de peso
-    // sin necesidad de un umbral inventado.
+    // Este componente es el PLAN B. Cuando hay corpus indexado entra el Elo, que
+    // mide lo mismo mejor. El récord queda para cuando no hay corpus — el bot en
+    // una corrida limpia, o una liga recién indexada.
     const mn = Math.min(nA, nB);
 
     const contrib = WEIGHTS.teamQuality * (wa - wb) * shrink;
@@ -243,7 +261,21 @@ export function buildProbability({
           'predecir 50-50, en prueba prospectiva sobre el corpus. El peso usado (3.5) queda por ' +
           'debajo del óptimo medido (5.0) a propósito.',
     });
-  } else {
+  } else if (eloDelta !== null && wa !== null && wb !== null) {
+    // Hay récord Y hay Elo. El récord se muestra porque es el dato que la gente
+    // reconoce, pero no suma: ya está contado, y mejor, dentro del Elo.
+    components.push({
+      id: 'quality',
+      label: 'Calidad de equipos (récord)',
+      detail: `${(waCrudo * 100).toFixed(0)}% contra ${(wbCrudo * 100).toFixed(0)}% · ` +
+        `${recordA.wins + recordA.losses} y ${recordB.wins + recordB.losses} series`,
+      contrib: 0,
+      excluded: true,
+      note:
+        'No entra: el Elo ya mide fuerza de equipo, y la mide mejor. En el ajuste conjunto fuera ' +
+        'de muestra el récord se queda con peso cero cuando el Elo está disponible.',
+    });
+  } else if (eloDelta === null) {
     components.push({
       id: 'quality',
       label: 'Calidad de equipos (standings)',
@@ -261,7 +293,20 @@ export function buildProbability({
   // el modelo no vio al entrenarse. Entra aparte de los standings porque mide
   // otra cosa — winrate por MAPA en el corpus, no por serie en la tabla — y
   // porque existe aunque el torneo no publique standings.
-  if (corpusTeam && corpusTeam.a != null && corpusTeam.b != null) {
+  if (eloDelta !== null && corpusTeam && corpusTeam.a != null && corpusTeam.b != null) {
+    // Mismo caso que el récord: sale del mismo corpus del que sale el Elo, y el
+    // Elo lo aprovecha mejor. Se apaga para no contar la fuerza tres veces.
+    components.push({
+      id: 'corpus-team',
+      label: 'Fuerza de equipo (corpus indexado)',
+      detail:
+        `${(corpusTeam.a * 100).toFixed(0)}% contra ${(corpusTeam.b * 100).toFixed(0)}% por mapa`,
+      contrib: 0,
+      excluded: true,
+      note: 'No entra: es winrate crudo del mismo corpus con el que se calcula el Elo, que además ' +
+        'pondera contra quién jugó cada equipo.',
+    });
+  } else if (corpusTeam && corpusTeam.a != null && corpusTeam.b != null) {
     const n = (corpusTeam.gamesA ?? 0) + (corpusTeam.gamesB ?? 0);
     const shrink = n / (n + 20);
     // Si los standings ya entraron, este componente pesa la mitad: los dos miden
@@ -361,7 +406,9 @@ export function buildProbability({
     finished: !!finished,
     components,
     logOdds: x,
-    hasQuality: (wa !== null && wb !== null) || !!(corpusTeam?.a != null && corpusTeam?.b != null),
+    hasQuality: eloDelta !== null
+      || (wa !== null && wb !== null)
+      || !!(corpusTeam?.a != null && corpusTeam?.b != null),
     hasStandings: wa !== null && wb !== null,
     draftWeight: dw,
   };

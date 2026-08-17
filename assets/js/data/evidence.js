@@ -103,6 +103,17 @@ export const EVIDENCE = {
     seriesUsables: 833,
 
     /**
+     * OJO: todo lo de arriba es POR SERIE. El modelo predice un MAPA, y un mapa
+     * suelto es más ruidoso que una serie al mejor de tres. Medido por mapa
+     * sobre 570 no vistos, el mismo componente da Brier 0.2292 y 62% [58, 66]
+     * —no el 68%—, con peso óptimo 3.75, cerca del 3.5 que usa el modelo.
+     *
+     * Es la segunda vez que la confusión serie/mapa mete un error acá. La
+     * primera fue un piso de 6 partidas medido en mapas y aplicado a series.
+     */
+    porMapa: { brier: 0.2292, acierto: 0.62, low: 0.58, high: 0.66, n: 570, pesoOptimo: 3.75 },
+
+    /**
      * Por liga, sobre el corpus entero. Las seis separan del 50%, cosa que con
      * el corpus chico no pasaba en ninguna salvo LPL.
      *
@@ -194,10 +205,53 @@ export const EVIDENCE = {
 
   /**
    * El test que define si el eje de escalado mide lo que dice medir: tendría que
-   * acertar MÁS en partidas largas que en cortas. Acierta igual. Eso no es "mide
-   * poco", es que no está midiendo escalado.
+   * acertar MÁS en partidas largas que en cortas.
+   *
+   * Con 414 mapas fallaba: 53% en largas contra 55% en cortas, o sea al revés.
+   * Con 2065 lo pasa, y de forma monotónica:
+   *
+   *   cortas (tercio más corto)   51.5% [47.4, 55.5]
+   *   medias                      50.3% [46.1, 54.5]
+   *   largas (tercio más largo)   55.7% [51.6, 59.7]   ***
+   *
+   * Es el único eje del índice que sobrevive una prueba de este tipo, y es una
+   * prueba fuerte: no es "acierta algo", es "acierta más justo donde la teoría
+   * dice que debería". Pero NO se puede usar para mover la probabilidad previa,
+   * porque la duración no se sabe antes de jugar. Sirve como lo que la tarjeta
+   * ya dice en el RELOJ: si esto se estira, tal equipo tiene la ventaja.
    */
-  escalado: { largas: 0.53, cortas: 0.55, nLargas: 166, nCortas: 163 },
+  escalado: {
+    cortas: 0.515, nCortas: 575,
+    medias: 0.503, nMedias: 545,
+    largas: 0.557, nLargas: 580, largasLow: 0.516, largasHigh: 0.597,
+    pasaElTest: true,
+    usarComo: 'condicional a la duración, nunca como probabilidad previa',
+  },
+
+  /**
+   * Elo: fuerza de equipo que pondera contra quién jugaste.
+   *
+   * Medido POR MAPA, que es la unidad en la que el modelo predice. La primera
+   * versión ajustó la escala sobre SERIES y quedó sobre-confiada de verdad
+   * (donde decía 91% ganaba 78%). Con la escala por mapa la calibración cierra.
+   *
+   * Fuera de muestra sobre 570 mapas no vistos, hiperparámetros elegidos dentro
+   * del entrenamiento:
+   *
+   *   base 50-50   0.2500
+   *   Elo          0.2285   61% [57, 65]
+   *   récord       0.2292   62% [58, 66]
+   *
+   * Empatan. El Elo se usa igual porque existe sin standings y porque prediciendo
+   * SERIES sí gana (0.2066 contra 0.2095 sobre 261 series).
+   */
+  elo: {
+    porMapa: { brier: 0.2285, acierto: 0.61, low: 0.57, high: 0.65, n: 570 },
+    porSerie: { brier: 0.2066, acierto: 0.68, low: 0.62, high: 0.74, n: 261 },
+    params: { K: 12, escala: 90, inicial: 1500 },
+    reemplazaAlRecord: true,
+    diferenciaTipica: { mediana: 39, p90: 111, max: 255 },
+  },
 
   /**
    * Qué campeón está fuerte de verdad en este meta (parches 16.14 a 16.16).

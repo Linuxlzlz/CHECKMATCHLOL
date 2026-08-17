@@ -36,6 +36,7 @@ import {
   buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache, rosterCheck,
   cachedIndices, aggregateIndices,
 } from './engine/meta.js';
+import { buildElo, eloFor, eloLogOdds } from './engine/elo.js';
 import { finalStateOf, resolveSeries, METHOD_LABEL } from './engine/outcome.js';
 import { collectDiagnostics } from './engine/diagnostics.js';
 import {
@@ -45,6 +46,32 @@ import {
 import { validateIndex, validateAcross, readValidation } from './engine/validation.js';
 
 const $ = (s) => document.querySelector(s);
+
+/**
+ * Tabla de Elo del corpus entero, memoizada.
+ *
+ * Los mapas se deduplican por gameId porque los índices de distintos torneos
+ * pueden solaparse, y un mapa contado dos veces movería el rating el doble.
+ */
+let _elo = null;
+let _eloFirma = '';
+function eloTable() {
+  const idx = cachedIndices();
+  const firma = idx.map((i) => `${i.tournamentId ?? i.id ?? ''}:${(i.maps || []).length}`).join('|');
+  if (_elo && firma === _eloFirma) return _elo;
+  const vistos = new Set();
+  const maps = [];
+  for (const i of idx) {
+    for (const m of i.maps || []) {
+      if (!m.gameId || vistos.has(m.gameId)) continue;
+      vistos.add(m.gameId);
+      maps.push(m);
+    }
+  }
+  _elo = buildElo(maps);
+  _eloFirma = firma;
+  return _elo;
+}
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -840,7 +867,18 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     ? { a: ctA.wr, b: ctB.wr, gamesA: ctA.games, gamesB: ctB.games }
     : null;
 
+  // Elo sobre todo el corpus indexado. Reemplaza al récord y al winrate por
+  // mapa cuando está disponible: mide lo mismo pero ponderando contra quién
+  // jugó cada equipo, y fuera de muestra le gana a los dos.
+  //
+  // eloTable() está memoizada por tamaño de corpus: recorrer 2000 mapas en cada
+  // render es barato pero no gratis, y el corpus solo cambia al indexar.
+  const eloA = eloFor(eloTable(), blue.teamId);
+  const eloB = eloFor(eloTable(), red.teamId);
+  const elo = { a: eloA, b: eloB, logOdds: eloLogOdds(eloA, eloB) };
+
   const prob = buildProbability({
+    elo,
     recordA: recA, recordB: recB,
     tfDelta: score.tfDelta,
     goldDiff: st ? st.a.gold - st.b.gold : null,
