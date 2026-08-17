@@ -93,14 +93,31 @@ function authHeader(method, url, queryParams, creds) {
   return `OAuth ${Object.keys(oauth).sort().map((k) => `${enc(k)}="${enc(oauth[k])}"`).join(', ')}`;
 }
 
+/** Tipo de imagen por sus bytes de cabecera, sin confiar en la extensión. */
+function sniffType(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+  if (buf.length > 12 && buf.slice(0, 4).toString('ascii') === 'RIFF') return 'image/webp';
+  if (buf.length > 6 && buf.slice(0, 3).toString('ascii') === 'GIF') return 'image/gif';
+  return 'image/png';
+}
+
 /** Sube un buffer y devuelve su media_id. */
 async function uploadBuffer(buf, creds) {
   if (buf.length > 4_800_000) throw new Error('imagen demasiado grande');
+  const mediaType = sniffType(buf);
 
   const post = async (endpoint) => {
     const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
+    const field = (name, value) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`);
+    // El endpoint v2 EXIGE media_category; el v1.1 lo aceptaba omitido. Van como
+    // partes del multipart, que no entran en la firma OAuth: no hay que
+    // recalcular nada por agregarlos.
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="i.png"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      field('media_category', 'tweet_image'),
+      field('media_type', mediaType),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="i"\r\nContent-Type: ${mediaType}\r\n\r\n`),
       buf,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
