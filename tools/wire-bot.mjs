@@ -54,6 +54,19 @@ function installStorage() {
  * OAuth 1.0a
  * ------------------------------------------------------------------ */
 
+// api.twitter.com REDIRIGE a api.x.com, y fetch descarta la cabecera
+// Authorization al seguir una redirección de otro origen. La firma se pierde en
+// el camino y la respuesta es 401 aunque las credenciales sean perfectas. Se
+// apunta directo al host final para que no haya salto.
+const API = 'https://api.x.com';
+
+/** Avisa si hubo redirección: ahí es donde se pierde la firma. */
+function warnIfRedirected(res, url) {
+  if (res.redirected && res.url !== url) {
+    console.warn(`  ojo: ${url} redirigió a ${res.url}. En un salto de origen se pierde la firma OAuth.`);
+  }
+}
+
 // encodeURIComponent deja pasar !'()* y la firma se rompe: RFC 3986 los exige.
 const enc = (s) =>
   encodeURIComponent(String(s)).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -83,25 +96,36 @@ function authHeader(method, url, queryParams, creds) {
 /** Sube un buffer y devuelve su media_id. */
 async function uploadBuffer(buf, creds) {
   if (buf.length > 4_800_000) throw new Error('imagen demasiado grande');
-  const endpoint = 'https://upload.twitter.com/1.1/media/upload.json';
-  const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
-  const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media"\r\nContent-Type: application/octet-stream\r\n\r\n`),
-    buf,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
 
-  const r = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader('POST', endpoint, {}, creds),
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
-    },
-    body,
-  });
-  const txt = await r.text();
-  if (!r.ok) throw new Error(`media ${r.status}: ${txt.slice(0, 300)}`);
-  return JSON.parse(txt).media_id_string;
+  const post = async (endpoint) => {
+    const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="media"; filename="i.png"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      buf,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    // El cuerpo multipart NO entra en la firma: OAuth 1.0a solo firma los
+    // parámetros de query y los oauth_.
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader('POST', endpoint, {}, creds),
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    });
+    warnIfRedirected(r, endpoint);
+    return { status: r.status, ok: r.ok, txt: await r.text() };
+  };
+
+  // v2 primero; el endpoint v1.1 de subida quedó en retirada.
+  let res = await post(`${API}/2/media/upload`);
+  if (res.status === 404 || res.status === 410) {
+    res = await post('https://upload.twitter.com/1.1/media/upload.json');
+  }
+  if (!res.ok) throw new Error(`media ${res.status}: ${res.txt.slice(0, 300)}`);
+  const j = JSON.parse(res.txt);
+  return j.media_id_string ?? j?.data?.id ?? j.id;
 }
 
 /** Sube una imagen remota y devuelve su media_id. */
@@ -137,7 +161,7 @@ async function verifyCredentials(creds) {
 }
 
 async function postTweet(text, mediaIds, creds) {
-  const endpoint = 'https://api.twitter.com/2/tweets';
+  const endpoint = `${API}/2/tweets`;
   const payload = { text };
   if (mediaIds?.length) payload.media = { media_ids: mediaIds.slice(0, 4) };
   const r = await fetch(endpoint, {
@@ -148,6 +172,7 @@ async function postTweet(text, mediaIds, creds) {
     },
     body: JSON.stringify(payload),
   });
+  warnIfRedirected(r, endpoint);
   const txt = await r.text();
   if (!r.ok) throw new Error(`tweet ${r.status}: ${txt.slice(0, 300)}`);
   return JSON.parse(txt);
@@ -210,11 +235,65 @@ function readCreds() {
   return creds;
 }
 
+/**
+ * Describe las credenciales SIN mostrarlas.
+ *
+ * Un 401 no distingue "la firma está mal" de "pegaste un valor que no era". Esto
+ * resuelve la segunda mitad: las cuatro credenciales de X tienen formas muy
+ * distintas y reconocibles, así que con la longitud y un par de rasgos alcanza
+ * para ver si alguna está en el casillero equivocado.
+ *
+ * No imprime ningún valor, ni siquiera parcial.
+ */
+function describeCreds(creds) {
+  const shape = (v) => ({
+    largo: v.length,
+    espacios: /\s/.test(v),
+    guion: v.includes('-'),
+  });
+  const s = {
+    X_API_KEY: shape(creds.key),
+    X_API_SECRET: shape(creds.secret),
+    X_ACCESS_TOKEN: shape(creds.token),
+    X_ACCESS_TOKEN_SECRET: shape(creds.tokenSecret),
+  };
+
+  console.log('\nForma de las credenciales (no se muestra ningún valor):');
+  for (const [k, v] of Object.entries(s)) {
+    console.log(`  ${k.padEnd(23)} ${String(v.largo).padStart(3)} caracteres${v.espacios ? '  ⚠ TIENE ESPACIOS' : ''}${v.guion ? '  (contiene "-")' : ''}`);
+  }
+
+  const avisos = [];
+  for (const [k, v] of Object.entries(s)) {
+    if (v.espacios) avisos.push(`${k} tiene espacios o saltos de línea: se pegó de más.`);
+  }
+  // El Access Token siempre empieza con el id numérico de la cuenta y un guion.
+  // Si no lo tiene, casi seguro es otra cosa: un Client ID o un Bearer Token.
+  if (!s.X_ACCESS_TOKEN.guion) {
+    avisos.push('X_ACCESS_TOKEN no contiene "-". Un Access Token de X tiene la forma "<id>-<...>". Revisá que no sea el Client ID ni el Bearer Token.');
+  }
+  if (s.X_API_KEY.guion) {
+    avisos.push('X_API_KEY contiene "-", cosa rara en una API Key. ¿No será el Access Token puesto en el casillero equivocado?');
+  }
+  if (s.X_API_KEY.largo === s.X_API_SECRET.largo) {
+    avisos.push('X_API_KEY y X_API_SECRET miden lo mismo, y normalmente el secreto es bastante más largo. Verificá que no sea el mismo valor dos veces.');
+  }
+  if (avisos.length) {
+    console.warn('\nPosibles problemas:');
+    for (const a of avisos) console.warn(`  - ${a}`);
+  } else {
+    console.log('  Las cuatro tienen la forma esperada.');
+  }
+  return avisos.length;
+}
+
 async function main() {
   // Modo comprobación: no toca las ligas ni la cola, solo valida las llaves.
   if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
+    const creds = readCreds();
+    describeCreds(creds);
     try {
-      const { mediaId } = await verifyCredentials(readCreds());
+      const { mediaId } = await verifyCredentials(creds);
       console.log(`Credenciales OK: firma válida y permiso de ESCRITURA confirmado (media_id ${mediaId}).`);
       console.log('No se publicó nada: el medio queda huérfano y caduca solo.');
       console.log('Poné WIRE_VERIFY en false para ver simulacros, y WIRE_LIVE en true para publicar.');
@@ -222,10 +301,11 @@ async function main() {
       console.error(`\nFALLÓ la comprobación: ${e.message}\n`);
       if (/\b401\b/.test(e.message)) {
         console.error(
-          'Un 401 es firma o llaves. Lo más común, en orden:\n' +
+          'Un 401 es firma o llaves. Mirá primero la forma de arriba; si las cuatro\n' +
+          'están bien, lo más común es, en orden:\n' +
           '  1. Las 4 credenciales no son de la MISMA app (API Key de una, Access Token de otra).\n' +
-          '  2. Se copió algún valor con un espacio al principio o al final.\n' +
-          '  3. Se regeneró alguna en el portal y quedó desactualizada en los secrets.'
+          '  2. Se regeneró alguna en el portal y quedó desactualizada en los secrets.\n' +
+          '  3. La app no está dentro de un Proyecto, que los endpoints v2 exigen.'
         );
       } else if (/\b403\b/.test(e.message)) {
         console.error(
