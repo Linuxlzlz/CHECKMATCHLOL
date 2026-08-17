@@ -207,87 +207,126 @@ export async function preMatchCard(d) {
 
   // Equipos con sus logos y, sobre todo, DE QUÉ LADO juegan: en LoL el lado no
   // es decorativo — cambia el orden del draft y el control del río.
-  await drawImageSafe(ctx, d.blueLogo, 70, 132, 104, 104);
-  await drawImageSafe(ctx, d.redLogo, W - 174, 132, 104, 104);
+  await drawImageSafe(ctx, d.blueLogo, 70, 108, 86, 86);
+  await drawImageSafe(ctx, d.redLogo, W - 156, 108, 86, 86);
 
-  goldTitle(ctx, d.blue, 70, 288, 42, 3);
-  ctx.font = 'bold 42px serif';
+  goldTitle(ctx, d.blue, 70, 232, 36, 3);
+  ctx.font = 'bold 36px serif';
   const wRed = trackedWidth(ctx, d.red, 3);
-  goldTitle(ctx, d.red, W - 70 - wRed, 288, 42, 3);
+  goldTitle(ctx, d.red, W - 70 - wRed, 232, 36, 3);
 
-  ctx.font = 'bold 15px sans-serif';
+  ctx.font = 'bold 14px sans-serif';
   ctx.fillStyle = ACCENT;
-  tracked(ctx, 'LADO AZUL', 70, 312, 2);
+  tracked(ctx, 'LADO AZUL', 70, 254, 2);
   ctx.fillStyle = RED;
   const wLbl = trackedWidth(ctx, 'LADO ROJO', 2);
-  tracked(ctx, 'LADO ROJO', W - 70 - wLbl, 312, 2);
+  tracked(ctx, 'LADO ROJO', W - 70 - wLbl, 254, 2);
 
-  // Probabilidad: cada mitad con el color de su lado. Un tramo gris no dice a
-  // quién pertenece y obliga a leer el número para entender el dibujo.
+  // Probabilidad: cada mitad con el color de su lado.
   const bx = 70;
   const bw = W - 140;
-  const by = 348;
-  const bh = 30;
+  const by = 272;
+  const bh = 28;
   const pBlue = Math.max(0.04, Math.min(0.96, d.pBlue ?? 0.5));
   ctx.fillStyle = ACCENT;
   ctx.fillRect(bx, by, bw * pBlue, bh);
   ctx.fillStyle = RED;
   ctx.fillRect(bx + bw * pBlue, by, bw * (1 - pBlue), bh);
   ctx.fillStyle = GOLD;
-  ctx.fillRect(bx + bw * pBlue - 1.5, by - 6, 3, bh + 12);
+  ctx.fillRect(bx + bw * pBlue - 1.5, by - 5, 3, bh + 10);
 
-  ctx.font = 'bold 21px sans-serif';
+  ctx.font = 'bold 20px sans-serif';
   ctx.fillStyle = INK;
-  ctx.fillText(`${Math.round(pBlue * 100)}%`, bx + 12, by + 21);
+  ctx.fillText(`${Math.round(pBlue * 100)}%`, bx + 12, by + 20);
   ctx.textAlign = 'right';
-  ctx.fillText(`${Math.round((1 - pBlue) * 100)}%`, bx + bw - 12, by + 21);
+  ctx.fillText(`${Math.round((1 - pBlue) * 100)}%`, bx + bw - 12, by + 20);
   ctx.textAlign = 'left';
 
-  ctx.font = '15px sans-serif';
-  ctx.fillStyle = CREAM;
-  tracked(ctx, 'PROBABILIDAD DE VICTORIA', bx, by - 14, 1.5);
+  // El favorito, dicho con todas las letras. Una barra obliga a interpretar; un
+  // nombre no.
+  if (d.favorite) {
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = GOLD_DARK;
+    const wFav = trackedWidth(ctx, 'FAVORITO', 2);
+    tracked(ctx, 'FAVORITO', bx, by + 48, 2);
+    ctx.font = 'bold 21px sans-serif';
+    ctx.fillStyle = d.favorite.side === 'blue' ? ACCENT : RED;
+    ctx.fillText(`${d.favorite.team}  ${Math.round(d.favorite.p * 100)}%`, bx + wFav + 16, by + 48);
+  }
 
-  rule(ctx, 70, 412, W - 140);
+  rule(ctx, 70, 338, W - 140);
 
-  // Bloque comparativo: en qué es fuerte y en qué es floja cada comp.
-  const col = (x, code, prof, color) => {
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillStyle = color;
-    ctx.fillText(code, x, 452);
+  // --- cara a cara por eje ---
+  // Barras divergentes desde el centro: de un vistazo se ve quién gana cada eje
+  // y por cuánto, que es la pregunta real frente a un draft. El perfil por lado
+  // que había antes se medía contra la referencia, y por eso un equipo podía
+  // quedar sin ninguna fortaleza aunque ganara ejes.
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillStyle = GOLD_DARK;
+  tracked(ctx, 'CARA A CARA POR EJE', 70, 368, 2);
 
-    let y = 484;
-    const line = (etiqueta, valor, c) => {
-      ctx.font = 'bold 14px sans-serif';
-      ctx.fillStyle = GOLD_DARK;
-      tracked(ctx, etiqueta, x, y, 1.5);
-      ctx.font = '19px sans-serif';
-      ctx.fillStyle = c;
-      ctx.fillText(valor, x + 78, y);
-      y += 30;
-    };
-    if (prof?.strong?.length) line('FUERTE', prof.strong.join(' · '), GOLD_LITE);
-    if (prof?.weak?.length) line('FLOJO', prof.weak.join(' · '), CREAM);
-    if (prof?.flags?.length) line('OJO', prof.flags.join(' · '), RED);
-    if (!prof?.strong?.length && !prof?.weak?.length && !prof?.flags?.length) {
-      ctx.font = '18px sans-serif';
-      ctx.fillStyle = CREAM;
-      ctx.fillText('Perfil parejo, sin eje destacado', x, y);
+  const cx = 640;          // centro de las barras
+  const half = 235;        // alcance máximo a cada lado
+  const MAXD = 6;          // puntos crudos que llenan media barra
+  let ry = 398;
+  for (const c of d.compare ?? []) {
+    ctx.font = '17px sans-serif';
+    ctx.fillStyle = c.narratable ? CREAM : 'rgba(205,198,182,0.45)';
+    ctx.fillText(c.label, 70, ry + 5);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(cx - half, ry - 6, half * 2, 12);
+    ctx.fillStyle = GOLD_DARK;
+    ctx.fillRect(cx - 1, ry - 11, 2, 22);
+
+    const w = Math.min(half, (Math.abs(c.dRaw) / MAXD) * half);
+    if (c.favors && w > 1) {
+      // Atenuado si no supera el umbral de narrabilidad: se ve, pero no se afirma.
+      ctx.fillStyle = c.favors === 'blue'
+        ? (c.narratable ? ACCENT : 'rgba(77,163,255,0.35)')
+        : (c.narratable ? RED : 'rgba(255,107,107,0.35)');
+      if (c.favors === 'blue') ctx.fillRect(cx - w, ry - 6, w, 12);
+      else ctx.fillRect(cx, ry - 6, w, 12);
     }
-  };
-  col(70, d.blue, d.blueProfile, ACCENT);
-  col(W / 2 + 20, d.red, d.redProfile, RED);
 
-  // La clave del matchup, al pie.
-  if (d.keyLine) {
-    ctx.font = '18px sans-serif';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = c.favors === 'blue' ? ACCENT : c.favors === 'red' ? RED : GOLD_DARK;
+    ctx.fillText(
+      c.favors ? `${c.favors === 'blue' ? d.blue : d.red}${c.narratable ? '' : ' (leve)'}` : 'parejo',
+      cx + half + 18, ry + 5
+    );
+    ry += 30;
+  }
+
+  // --- reloj y zona ---
+  let fy = ry + 26;
+  if (d.window) {
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = GOLD_DARK;
+    const wl = trackedWidth(ctx, 'RELOJ', 2);
+    tracked(ctx, 'RELOJ', 70, fy, 2);
+    ctx.font = '17px sans-serif';
     ctx.fillStyle = GOLD_LITE;
-    ctx.fillText(String(d.keyLine).slice(0, 84), 70, H - 62);
+    ctx.fillText(
+      `${d.window.early} debe sacar ventaja antes del min ${d.window.from} · ${d.window.late} escala mejor`,
+      70 + wl + 16, fy
+    );
+    fy += 26;
+  }
+  if (d.keyMatchup) {
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = GOLD_DARK;
+    const wk = trackedWidth(ctx, 'CLAVE', 2);
+    tracked(ctx, 'CLAVE', 70, fy, 2);
+    ctx.font = '17px sans-serif';
+    ctx.fillStyle = GOLD_LITE;
+    ctx.fillText(`${d.keyMatchup.label}: ${d.keyMatchup.blue} vs ${d.keyMatchup.red}`, 70 + wk + 16, fy);
   }
 
   ctx.font = '15px sans-serif';
   ctx.fillStyle = GOLD_DARK;
   ctx.textAlign = 'right';
-  tracked(ctx, 'CHECKMATCH LOL', W - 250, H - 62, 3);
+  tracked(ctx, 'CHECKMATCH LOL', W - 250, H - 42, 3);
   ctx.textAlign = 'left';
   return canvas.toBuffer('image/png');
 }

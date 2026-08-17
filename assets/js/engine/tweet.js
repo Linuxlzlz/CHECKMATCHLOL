@@ -194,6 +194,52 @@ const AXIS_ES = {
  * El umbral de 0.4 sd existe para no llamar "fuerte" a algo que está en el
  * promedio. Un eje que no se despega no dice nada y es mejor callarlo.
  */
+/**
+ * Comparación cara a cara por eje: quién gana cada uno y por cuánto.
+ *
+ * Reemplaza al perfil por lado, que tenía un defecto feo: medía contra la
+ * REFERENCIA, así que un equipo podía aparecer sin ninguna fortaleza solo porque
+ * ninguna se despegaba del promedio. Contra el rival siempre hay un lado mejor
+ * en cada eje, y esa es la pregunta que uno se hace mirando un draft.
+ *
+ * Se conserva la regla de narrabilidad: un eje con diferencia cruda por debajo
+ * del umbral se marca y no se afirma. Empatado no es lo mismo que sin datos.
+ */
+export function axisCompare(score) {
+  return (score?.perAxis ?? []).map((ax) => ({
+    axis: ax.axis,
+    label: AXIS_ES[ax.axis] ?? ax.axis,
+    dRaw: ax.dRaw,
+    favors: ax.dRaw === 0 ? null : ax.dRaw > 0 ? 'blue' : 'red',
+    narratable: ax.narratable,
+  }));
+}
+
+/**
+ * El enfrentamiento que decide, expresado por ZONA del mapa.
+ *
+ * "Ventaja de asedio" no le dice a nadie dónde mirar; "BOT LANE: Yunara + Nautilus
+ * contra Jhin + Rakan" sí. El ADC y el support van juntos porque comparten calle:
+ * separarlos sería inventar dos duelos donde hay uno.
+ */
+export function keyMatchup(edges, sideA, sideB) {
+  const role = edges?.[0]?.carrier?.role ?? null;
+  const champs = (side, roles) =>
+    roles.map((r) => side.players.find((p) => p.role === r)?.champion).filter(Boolean).join(' + ');
+
+  if (!role) return null;
+  const ZONA = {
+    top: { label: 'TOP', roles: ['top'] },
+    jungle: { label: 'JUNGLA', roles: ['jungle'] },
+    mid: { label: 'MID', roles: ['mid'] },
+    bottom: { label: 'BOT LANE', roles: ['bottom', 'support'] },
+    support: { label: 'BOT LANE', roles: ['bottom', 'support'] },
+  };
+  const z = ZONA[role];
+  if (!z) return null;
+  return { label: z.label, blue: champs(sideA, z.roles), red: champs(sideB, z.roles) };
+}
+
 export function compProfile(sideScore, axes, sideKey) {
   const z = sideScore?.z ?? {};
   const ranked = Object.entries(z)

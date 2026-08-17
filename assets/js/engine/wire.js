@@ -24,7 +24,9 @@ import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
 import { buildProbability } from './probability.js';
-import { preMatchTweet, postMatchTweet, keyFactOf, mvpOf, compProfile } from './tweet.js';
+import {
+  preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup,
+} from './tweet.js';
 
 const KEY = 'cml:wire:v1';
 const MAX_QUEUE = 60;
@@ -235,7 +237,7 @@ export async function tick({
         { team: sides.b.team, champions: sides.b.players.map((p) => p.champion) }
       );
       const axes = structuralAxes(sides.a, sides.b);
-      const { edges } = concentrationAndWindow(sides.a, sides.b, axes);
+      const { edges, window: ventana } = concentrationAndWindow(sides.a, sides.b, axes);
 
       if (needPre) {
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
@@ -262,9 +264,19 @@ export async function tick({
               ? `Draft: ${score.tfFavors} +${Math.abs(score.tfDelta).toFixed(2)} sd en teamfight`
               : 'Draft parejo: el índice no elige lado',
             keyLine: edges?.[0] ? `Clave: ${edges[0].label} (${edges[0].side})` : null,
-            // Perfil de cada comp, para el bloque comparativo de abajo.
-            blueProfile: compProfile(score.sides[0], axes, 'a'),
-            redProfile: compProfile(score.sides[1], axes, 'b'),
+            // Quién es favorito, dicho sin que haya que interpretar la barra.
+            favorite: {
+              team: prob.p >= 0.5 ? sides.a.team : sides.b.team,
+              side: prob.p >= 0.5 ? 'blue' : 'red',
+              p: Math.max(prob.p, 1 - prob.p),
+            },
+            // Cara a cara por eje: teamfight, pick, split, asedio, escalado.
+            compare: axisCompare(score),
+            // Quién tiene que apurar y hasta cuándo.
+            window: ventana?.declared
+              ? { early: ventana.earlySide, late: ventana.lateSide, from: ventana.from, to: ventana.to }
+              : null,
+            keyMatchup: keyMatchup(edges, sides.a, sides.b),
           },
           ...t,
         }, regenerate)) added++;
