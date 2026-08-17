@@ -23,11 +23,35 @@ const sigmoid = (x) => 1 / (1 + Math.exp(-x));
  *  - El estado de partida domina una vez que la partida avanzó.
  */
 export const WEIGHTS = {
-  teamQuality: 2.2,   // sobre (winrate_a - winrate_b), rango [-1, 1]
+  teamQuality: 3.5,   // sobre (winrate_a - winrate_b) YA SUAVIZADO, ver PRIOR
   draft: 0.30,        // por sd de Δ teamfight, solo si |Δ| > 0.5
   goldPerK: 0.55,     // por cada 1000 de oro de diferencia, escalado por minuto
   corpusTeam: 2.2,    // sobre la diferencia de winrate medida en el corpus
 };
+
+/**
+ * Cómo se lee un récord corto sin que mienta.
+ *
+ * El winrate crudo `victorias/partidas` da 1.00 con un 1-0, y ningún encogido
+ * posterior arregla un valor que ya nació roto: el modelo llegó a mover más
+ * puntos con un 1-0 contra 0-1 (+10.8) que con un 3-2 contra 2-3 (+6.1), que
+ * es al revés de como debería ser.
+ *
+ * Se corrige en dos pasos, porque hacen falta los dos:
+ *
+ *   PRIOR  suaviza el VALOR: (v + k/2) / (n + k). Un 1-0 pasa a valer 0.60 en
+ *          vez de 1.00. Solo con esto no alcanza — la diferencia de una
+ *          partida se sigue dividiendo por un denominador chico, así que un
+ *          1-0 le seguiría ganando a un 3-2.
+ *   SHRINK encoge por INCERTIDUMBRE: n/(n+c) sobre el total de las dos
+ *          historias. Esto es lo que finalmente pone el 3-2 por encima.
+ *
+ * Medido sobre 142 series del corpus, prospectivo: Brier 0.2268 contra 0.2253
+ * de la fórmula vieja y 0.2500 de predecir 50-50. Cuesta 0.0015 y a cambio el
+ * orden queda bien. El peso óptimo de ajuste era 5.0; se usa 3.5 porque
+ * elegirlo sobre los mismos 142 datos que lo miden es sobreajuste.
+ */
+export const PRIOR = { k: 4, c: 4 };
 
 /**
  * Peso del draft, decidido por la medición y no por juicio.
@@ -126,10 +150,18 @@ export function buildProbability({
   // componente entra en CERO. Un eje solo mueve la probabilidad si su muestra
   // lo sostiene; con este n no lo sostiene. Se sigue mostrando, con su número,
   // para que se vea que se miró y qué dio — igual que el eje de draft.
+  // Entra con su valor MEDIDO, que es ~51%: aporta menos de un punto. No es cero
+  // —el lado algo vale— pero tampoco los 7 puntos que regalaba el 57% viejo.
+  //
+  // Hay un argumento fuerte para no dejarlo en cero aunque el intervalo cruce el
+  // 50%: cuando un equipo puede ELEGIR lado (mapa 2 en adelante), elige azul el
+  // 88% de las veces. Eso es preferencia revelada de gente que se juega el
+  // sueldo, y dice que la ventaja existe. Lo que este corpus no puede es medir
+  // su tamaño: para distinguir 51% de 53% harían falta ~1500 primeros mapas y
+  // hay 175. Así que entra con lo medido, que es lo honesto mientras tanto.
   const sr = sideRate ?? EVIDENCE.ladoAzul.p;
-  const sideSolid = sideRate ? null : EVIDENCE.ladoAzul.solido;
   if (sr && sr !== 0.5) {
-    const contrib = sideSolid === false ? 0 : logit(sr);
+    const contrib = logit(sr);
     x += contrib;
     components.push({
       id: 'side',
@@ -137,27 +169,37 @@ export function buildProbability({
       detail: sideRate
         ? `${(sr * 100).toFixed(0)}% medido en el corpus indexado`
         : `${(sr * 100).toFixed(1)}% [${(EVIDENCE.ladoAzul.low * 100).toFixed(0)}, ` +
-          `${(EVIDENCE.ladoAzul.high * 100).toFixed(0)}] sobre ${EVIDENCE.ladoAzul.n} primeros mapas` +
-          (sideSolid === false ? ' · peso 0: el intervalo cruza el 50%' : ''),
+          `${(EVIDENCE.ladoAzul.high * 100).toFixed(0)}] sobre ${EVIDENCE.ladoAzul.n} primeros mapas`,
       contrib,
-      excluded: sideSolid === false,
+      weak: !EVIDENCE.ladoAzul.solido,
       note:
-        'Medido solo en primeros mapas, que es donde el lado no lo decide el resultado anterior. ' +
-        'El 57% que se leía antes mezclaba el sorteo del mapa 2, donde el azul es el ganador del ' +
-        'mapa 1 el 88% de las veces. Sin ese confusor el lado no separa, y lo que no separa no pesa.',
+        'Medido solo en primeros mapas, que es donde el lado no lo decide el resultado anterior: ' +
+        'el 57% que se leía antes mezclaba el sorteo del mapa 2, donde el azul es el ganador del ' +
+        'mapa 1 el 88% de las veces. Aporta menos de un punto, y ese es su tamaño real: cuando el ' +
+        'lado se sortea, el azul gana 51%.',
     });
   }
 
   // 1. Calidad de los equipos.
-  const wr = (r) => (r && r.wins + r.losses > 0 ? r.wins / (r.wins + r.losses) : null);
-  const wa = wr(recordA);
-  const wb = wr(recordB);
+  //
+  // El winrate va SUAVIZADO (ver PRIOR): un 1-0 vale 0.60, no 1.00. El crudo se
+  // guarda aparte solo para mostrarlo, porque lo que el usuario quiere leer en
+  // la tarjeta es "3-1", no "el equivalente bayesiano de 3-1".
+  const wrCrudo = (r) => (r && r.wins + r.losses > 0 ? r.wins / (r.wins + r.losses) : null);
+  const wrSuave = (r) =>
+    r && r.wins + r.losses > 0
+      ? (r.wins + PRIOR.k / 2) / (r.wins + r.losses + PRIOR.k)
+      : null;
+  const waCrudo = wrCrudo(recordA);
+  const wbCrudo = wrCrudo(recordB);
+  const wa = wrSuave(recordA);
+  const wb = wrSuave(recordB);
   if (wa !== null && wb !== null) {
     const nA = recordA.wins + recordA.losses;
     const nB = recordB.wins + recordB.losses;
     const n = nA + nB;
-    // Encoge hacia cero con muestras chicas: 4 partidas no son una temporada.
-    const shrink = n / (n + 8);
+    // Encoge por incertidumbre: dos partidas no son una temporada.
+    const shrink = n / (n + PRIOR.c);
 
     // Acá hubo un freno por poca historia y lo saqué, porque estaba mal medido.
     //
@@ -190,16 +232,16 @@ export function buildProbability({
       id: 'quality',
       label: 'Calidad de equipos (récord)',
       detail:
-        `${(wa * 100).toFixed(0)}% contra ${(wb * 100).toFixed(0)}% · ${nA} y ${nB} series · ` +
-        `encogido ×${shrink.toFixed(2)}`,
+        `${(waCrudo * 100).toFixed(0)}% contra ${(wbCrudo * 100).toFixed(0)}% · ${nA} y ${nB} series · ` +
+        `leído ${(wa * 100).toFixed(0)}/${(wb * 100).toFixed(0)} por muestra · encogido ×${shrink.toFixed(2)}`,
       contrib,
       note: mn <= 2
-        ? 'Historia corta: el encogido por muestra ya lo baja a una fracción del peso. Aun así ' +
-          'aporta — medido sobre 61 series con esa misma historia, gana 0.014 de Brier sobre ' +
-          'predecir 50-50.'
+        ? 'Historia corta: el récord se lee suavizado hacia el 50% antes de entrar, así que un ' +
+          '1-0 vale 60% y no 100%. Aun así aporta — medido sobre 61 series con esa misma historia, ' +
+          'gana 0.014 de Brier sobre predecir 50-50.'
         : 'Tramo donde el récord más rinde: con 3+ series por equipo gana 0.032 de Brier sobre ' +
-          'predecir 50-50, en prueba prospectiva sobre el corpus. El peso usado (2.2) queda por ' +
-          'debajo del óptimo medido (3.4) a propósito.',
+          'predecir 50-50, en prueba prospectiva sobre el corpus. El peso usado (3.5) queda por ' +
+          'debajo del óptimo medido (5.0) a propósito.',
     });
   } else {
     components.push({

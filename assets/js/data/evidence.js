@@ -75,8 +75,29 @@ export const EVIDENCE = {
    */
   record: {
     base: { brier: 0.2500, n: 142, nota: 'predecir 50-50' },
-    conRecord: { brier: 0.2253, peso: 2.2 },
-    optimo: { peso: 3.4, brier: 0.2223 },
+    conRecord: { brier: 0.2268, peso: 3.5, prior: { k: 4, c: 4 } },
+    optimo: { peso: 5.0, brier: 0.2248 },
+
+    /**
+     * Por qué el winrate entra suavizado y no crudo.
+     *
+     * Con `victorias/partidas` a secas, un 1-0 vale 1.00 y el modelo movía más
+     * puntos con un 1-0 contra 0-1 (+10.8) que con un 3-2 contra 2-3 (+6.1).
+     * El suavizado bayesiano corrige el valor y el encogido por n corrige la
+     * incertidumbre; hacen falta los dos, porque solo con el primero un 1-0 le
+     * sigue ganando a un 3-2 (la misma diferencia de una partida dividida por
+     * un denominador más chico).
+     *
+     * Cuesta 0.0015 de Brier contra la fórmula vieja y a cambio el orden queda
+     * bien. La confianza extra se va a donde hay evidencia: un 9-1 contra 1-9
+     * sube de 78% a 85%.
+     */
+    formulaVieja: { brier: 0.2253, peso: 2.2, patologia: '1-0 pesaba más que 3-2' },
+    casos: {
+      '1-0 vs 0-1': { antes: 0.608, ahora: 0.567 },
+      '3-2 vs 2-3': { antes: 0.561, ahora: 0.578 },
+      '9-1 vs 1-9': { antes: 0.779, ahora: 0.846 },
+    },
 
     /**
      * OJO CON LA UNIDAD. El récord de los standings viene en SERIES, no en
