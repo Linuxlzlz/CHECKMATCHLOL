@@ -25,7 +25,8 @@ import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
 import { buildProbability } from './probability.js';
 import {
-  preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup,
+  preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
+  MVP_CRITERIA,
 } from './tweet.js';
 
 const KEY = 'cml:wire:v1';
@@ -272,6 +273,8 @@ export async function tick({
             },
             // Cara a cara por eje: teamfight, pick, split, asedio, escalado.
             compare: axisCompare(score),
+            // Qué tiene que pasar para que gane cada uno.
+            plans: winConditions(axisCompare(score), axes, sides.a.team, sides.b.team),
             // Quién tiene que apurar y hasta cuándo.
             window: ventana?.declared
               ? { early: ventana.earlySide, late: ventana.lateSide, from: ventana.from, to: ventana.to }
@@ -342,6 +345,7 @@ export async function tick({
             mvp: mvp ? {
               name: mvp.name.replace(/^\S+\s+/, ''), champion: mvp.champion,
               team: mvp.team, photo: mvp.photo, rating: mvp.rating, bars: mvp.bars,
+              criteria: MVP_CRITERIA,
             } : null,
           },
           ...t,

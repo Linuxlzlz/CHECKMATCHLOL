@@ -17,7 +17,10 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 const W = 1200;
+// La de cierre entra en 16:9; la de arranque necesita más alto porque lleva el
+// cara a cara por eje más los planes de los dos equipos.
 const H = 675;
+const H_PRE = 780;
 
 const INK = '#080b12';
 const GLOW = '#16213a';
@@ -72,22 +75,22 @@ function diamond(ctx, cx, cy, r, fill) {
 }
 
 /** Fondo completo: halo, retícula hexagonal, marco cortado y rombos. */
-function background(ctx) {
+function background(ctx, h = H) {
   ctx.fillStyle = INK;
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(0, 0, W, h);
 
-  const g = ctx.createRadialGradient(W * 0.62, H * 0.34, 40, W * 0.62, H * 0.34, W * 0.78);
+  const g = ctx.createRadialGradient(W * 0.62, h * 0.34, 40, W * 0.62, h * 0.34, W * 0.78);
   g.addColorStop(0, GLOW);
   g.addColorStop(1, INK);
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(0, 0, W, h);
 
   ctx.strokeStyle = 'rgba(224,182,74,0.06)';
   ctx.lineWidth = 1.2;
   const r = 40;
   const dx = Math.sqrt(3) * r;
   const dy = 1.5 * r;
-  for (let row = -1; row * dy < H + dy; row++) {
+  for (let row = -1; row * dy < h + dy; row++) {
     for (let col = -1; col * dx < W + dx; col++) {
       hexPath(ctx, col * dx + (row % 2 ? dx / 2 : 0), row * dy, r);
       ctx.stroke();
@@ -103,15 +106,15 @@ function background(ctx) {
   ctx.moveTo(m + cut, m);
   ctx.lineTo(W - m - cut, m);
   ctx.lineTo(W - m, m + cut);
-  ctx.lineTo(W - m, H - m - cut);
-  ctx.lineTo(W - m - cut, H - m);
-  ctx.lineTo(m + cut, H - m);
-  ctx.lineTo(m, H - m - cut);
+  ctx.lineTo(W - m, h - m - cut);
+  ctx.lineTo(W - m - cut, h - m);
+  ctx.lineTo(m + cut, h - m);
+  ctx.lineTo(m, h - m - cut);
   ctx.lineTo(m, m + cut);
   ctx.closePath();
   ctx.stroke();
 
-  for (const cy of [m, H - m]) {
+  for (const cy of [m, h - m]) {
     diamond(ctx, W / 2, cy, 15, INK);
     diamond(ctx, W / 2, cy, 11, GOLD);
     diamond(ctx, W / 2, cy, 5, INK);
@@ -193,9 +196,9 @@ function statBar(ctx, x, y, w, label, value, frac, color = GOLD) {
 
 /** Arranque de mapa: los dos equipos, la probabilidad y la clave. */
 export async function preMatchCard(d) {
-  const canvas = createCanvas(W, H);
+  const canvas = createCanvas(W, H_PRE);
   const ctx = canvas.getContext('2d');
-  background(ctx);
+  background(ctx, H_PRE);
 
   ctx.font = 'bold 20px sans-serif';
   ctx.fillStyle = RED;
@@ -298,15 +301,38 @@ export async function preMatchCard(d) {
     ry += 30;
   }
 
+  // --- cómo rompe el partido cada uno ---
+  let fy = ry + 22;
+  rule(ctx, 70, fy - 14, W - 140);
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillStyle = GOLD_DARK;
+  tracked(ctx, 'CÓMO ROMPE EL PARTIDO', 70, fy + 16, 2);
+  fy += 44;
+
+  const plan = (code, texto, color) => {
+    ctx.font = 'bold 19px sans-serif';
+    ctx.fillStyle = color;
+    const wc = ctx.measureText(code).width;
+    ctx.fillText(code, 70, fy);
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = GOLD_LITE;
+    ctx.fillText(String(texto ?? '').slice(0, 78), 70 + wc + 18, fy);
+    fy += 28;
+  };
+  if (d.plans) {
+    plan(d.blue, d.plans.blue, ACCENT);
+    plan(d.red, d.plans.red, RED);
+  }
+
   // --- reloj y zona ---
-  let fy = ry + 26;
+  fy += 10;
   if (d.window) {
     ctx.font = 'bold 13px sans-serif';
     ctx.fillStyle = GOLD_DARK;
     const wl = trackedWidth(ctx, 'RELOJ', 2);
     tracked(ctx, 'RELOJ', 70, fy, 2);
     ctx.font = '17px sans-serif';
-    ctx.fillStyle = GOLD_LITE;
+    ctx.fillStyle = CREAM;
     ctx.fillText(
       `${d.window.early} debe sacar ventaja antes del min ${d.window.from} · ${d.window.late} escala mejor`,
       70 + wl + 16, fy
@@ -321,12 +347,19 @@ export async function preMatchCard(d) {
     ctx.font = '17px sans-serif';
     ctx.fillStyle = GOLD_LITE;
     ctx.fillText(`${d.keyMatchup.label}: ${d.keyMatchup.blue} vs ${d.keyMatchup.red}`, 70 + wk + 16, fy);
+    // El porqué: sin él, la zona es un dato suelto.
+    if (d.keyMatchup.reason) {
+      fy += 22;
+      ctx.font = 'italic 15px sans-serif';
+      ctx.fillStyle = CREAM;
+      ctx.fillText(`porque ${d.keyMatchup.reason}`.slice(0, 90), 70 + wk + 16, fy);
+    }
   }
 
   ctx.font = '15px sans-serif';
   ctx.fillStyle = GOLD_DARK;
   ctx.textAlign = 'right';
-  tracked(ctx, 'CHECKMATCH LOL', W - 250, H - 42, 3);
+  tracked(ctx, 'CHECKMATCH LOL', W - 250, H_PRE - 42, 3);
   ctx.textAlign = 'left';
   return canvas.toBuffer('image/png');
 }
@@ -398,6 +431,12 @@ export async function postMatchCard(d) {
     ctx.font = '15px sans-serif';
     ctx.fillStyle = GOLD_DARK;
     ctx.fillText('rendimiento e impacto', rx, py + 146);
+    // El criterio, a la vista: una nota sin su regla es una opinión con decimales.
+    if (mvp.criteria) {
+      ctx.font = '13px sans-serif';
+      ctx.fillStyle = 'rgba(205,198,182,0.75)';
+      ctx.fillText(mvp.criteria, rx, py + 170);
+    }
     ctx.textAlign = 'left';
 
     // Las cinco barras: en qué se destacó.

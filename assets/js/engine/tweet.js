@@ -222,6 +222,54 @@ export function axisCompare(score) {
  * contra Jhin + Rakan" sí. El ADC y el support van juntos porque comparten calle:
  * separarlos sería inventar dos duelos donde hay uno.
  */
+/**
+ * Cómo rompe el partido cada equipo.
+ *
+ * Sale del eje donde cada lado saca su mayor ventaja cara a cara, traducido a una
+ * acción concreta. No es una predicción: es qué tiene que pasar para que ESE lado
+ * gane, que es lo que uno mira cuando arranca el mapa.
+ *
+ * Si un equipo no gana ningún eje, se lo dice en vez de inventarle un plan.
+ */
+const PLAN = {
+  teamfight: 'Forzar 5v5 en dragón y barón',
+  pick: 'Cazar aislados con visión propia',
+  split: 'Estirar el mapa por las calles laterales',
+  siege: 'Romper torres a distancia sin pelear',
+  scaling: 'Alargar la partida y no arriesgar temprano',
+};
+
+export function winConditions(compare, axes, teamA, teamB) {
+  const best = (lado) =>
+    compare
+      .filter((c) => c.favors === lado)
+      .sort((x, y) => Math.abs(y.dRaw) - Math.abs(x.dRaw))[0] ?? null;
+
+  const get = (id) => axes.find((a) => a.id === id);
+  const fl = get('frontline');
+  const eng = get('engage');
+
+  const armar = (lado, propio, rival, rivalKey) => {
+    const b = best(lado);
+    const partes = [];
+    if (b) partes.push(PLAN[b.axis] ?? b.label);
+    // Los huecos del rival valen tanto como las virtudes propias.
+    if (fl && (rivalKey === 'a' ? fl.a : fl.b) === 0) partes.push('entrar a la línea trasera: no tienen tanque');
+    else if (eng && (rivalKey === 'a' ? eng.a : eng.b) === 0) partes.push(`${rival} no puede forzar peleas`);
+    return partes.length ? partes.join(' · ') : 'Sin ventaja clara: depende de la ejecución';
+  };
+
+  return {
+    blue: armar('blue', teamA, teamB, 'b'),
+    red: armar('red', teamB, teamA, 'a'),
+  };
+}
+
+/** El criterio de la nota del MVP, dicho en una línea. */
+export const MVP_CRITERIA =
+  `daño ${MVP_WEIGHTS.damage} · kills ${MVP_WEIGHTS.kills} · KDA ${MVP_WEIGHTS.kda} · ` +
+  `oro ${MVP_WEIGHTS.gold} · −${MVP_WEIGHTS.deathPenalty} por muerte`;
+
 export function keyMatchup(edges, sideA, sideB) {
   const role = edges?.[0]?.carrier?.role ?? null;
   const champs = (side, roles) =>
@@ -237,7 +285,15 @@ export function keyMatchup(edges, sideA, sideB) {
   };
   const z = ZONA[role];
   if (!z) return null;
-  return { label: z.label, blue: champs(sideA, z.roles), red: champs(sideB, z.roles) };
+  return {
+    label: z.label,
+    blue: champs(sideA, z.roles),
+    red: champs(sideB, z.roles),
+    // Por qué ESA zona y no otra: ahí se concentra el margen estructural.
+    reason: edges[0].label
+      ? `ahí se concentra ${String(edges[0].label).toLowerCase()} de ${edges[0].side}`
+      : null,
+  };
 }
 
 export function compProfile(sideScore, axes, sideKey) {
