@@ -486,6 +486,21 @@ sin depender de que tengas el sitio abierto.
 | `TELEGRAM_CHAT_ID` | Escribile a tu bot y abrí `api.telegram.org/bot<TOKEN>/getUpdates`: el id sale en `chat.id` |
 | `DISCORD_WEBHOOK` | Canal → Editar → Integraciones → Webhooks → Nuevo webhook → Copiar URL |
 
+Van en **Secrets**, no en Variables: un webhook es una credencial y en Variables se ve en texto
+plano. Además el workflow los lee de `secrets.*`, así que puestos en Variables llegan vacíos.
+
+### Discord como único destino
+
+Es la configuración más simple y no cuesta nada:
+
+| Variable | Valor |
+|---|---|
+| `WIRE_LIVE` | `false` — no se toca la API de X, cero créditos |
+| `WIRE_INTENT` | `false` — saca el enlace "Publicar en X" del mensaje |
+
+Con `WIRE_LIVE=false` las credenciales de X no hacen falta; si están puestas, no se usan. El bot
+detecta los partidos, arma el análisis, dibuja la tarjeta y la deja en tu canal cada 10 minutos.
+
 Alcanza con configurar uno de los dos. Los avisos se mandan **siempre**, publique o no en X, y llevan
 su propia marca: que te haya llegado el aviso no significa que ya esté publicado.
 

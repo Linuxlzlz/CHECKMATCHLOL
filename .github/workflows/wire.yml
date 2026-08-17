@@ -48,6 +48,7 @@ jobs:
           WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
           WIRE_MEDIA: ${{ vars.WIRE_MEDIA }}
           WIRE_CARD: ${{ vars.WIRE_CARD }}
+          WIRE_INTENT: ${{ vars.WIRE_INTENT }}
           WIRE_PAUSE_HOURS: ${{ vars.WIRE_PAUSE_HOURS }}
           # Entrega gratuita: el tweet ya armado te llega y lo publicás de un toque.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

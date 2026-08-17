@@ -212,8 +212,16 @@ async function postTweet(text, mediaIds, creds) {
 
 const INTENT = (text) => `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
 
+/** El pie con el enlace a X. Con Discord como destino final, sobra. */
+const intentFooter = (text) =>
+  String(process.env.WIRE_INTENT ?? 'true').toLowerCase() === 'false'
+    ? ''
+    : `\n[Publicar en X](${INTENT(text)})`;
+
 async function sendTelegram(post, token, chatId, card) {
-  const caption = `${post.text}\n\n▸ Publicar: ${INTENT(post.text)}`;
+  const linkX = String(process.env.WIRE_INTENT ?? 'true').toLowerCase() === 'false'
+    ? '' : `\n\n▸ Publicar: ${INTENT(post.text)}`;
+  const caption = `${post.text}${linkX}`;
 
   if (card) {
     const boundary = `----cml${crypto.randomBytes(12).toString('hex')}`;
@@ -245,9 +253,7 @@ async function sendTelegram(post, token, chatId, card) {
 }
 
 async function sendDiscord(post, webhook, card) {
-  const payload = {
-    content: `\`\`\`\n${post.text}\n\`\`\`\n[Publicar en X](${INTENT(post.text)})`,
-  };
+  const payload = { content: `\`\`\`\n${post.text}\n\`\`\`${intentFooter(post.text)}` };
 
   // Con tarjeta va como archivo adjunto, que Discord muestra grande. Sin ella,
   // se cae a los logos sueltos como antes.
@@ -330,7 +336,20 @@ async function deliverFree(pending) {
  * main
  * ------------------------------------------------------------------ */
 
-const num = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def);
+/**
+ * Número desde una variable de entorno.
+ *
+ * Cuidado con la cadena vacía: Actions pasa "" cuando la variable no existe, y
+ * Number("") es 0, que es finito. La versión ingenua devolvía 0 en vez del valor
+ * por defecto — así la pausa por cuota agotada terminó siendo "0 h", o sea
+ * ninguna pausa. Un default que nunca se aplica es peor que no tenerlo.
+ */
+const num = (v, def) => {
+  const s = String(v ?? '').trim();
+  if (!s) return def;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : def;
+};
 
 /**
  * Resuelve WIRE_LEAGUES contra las ligas conocidas.
@@ -557,6 +576,19 @@ async function main() {
     return;
   }
 
+  // Con X fuera de juego, que falten sus credenciales no es un error: los canales
+  // gratuitos ya entregaron arriba y el trabajo está hecho.
+  const faltan = ['X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_TOKEN_SECRET']
+    .filter((k) => !process.env[k]);
+  if (faltan.length) {
+    console.warn(
+      `\nWIRE_LIVE está en true pero faltan ${faltan.length} de las 4 credenciales de X, ` +
+      'así que no se publica ahí. Si X ya no es un destino, poné WIRE_LIVE en false y ' +
+      'este aviso desaparece.'
+    );
+    store.flush();
+    return;
+  }
   const creds = readCreds();
 
   // Freno por cuota agotada.
