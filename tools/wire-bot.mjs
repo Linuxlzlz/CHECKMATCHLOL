@@ -258,25 +258,50 @@ function describeCreds(creds) {
     X_ACCESS_TOKEN_SECRET: shape(creds.tokenSecret),
   };
 
+  // Largos típicos de cada credencial de X. Son estables y muy distintos entre
+  // sí, así que alcanzan para detectar un valor puesto en el casillero de otro.
+  const ESPERADO = {
+    X_API_KEY: 25,
+    X_API_SECRET: 50,
+    X_ACCESS_TOKEN: null,          // varía; lo que lo identifica es el guion
+    X_ACCESS_TOKEN_SECRET: 45,
+  };
+
   console.log('\nForma de las credenciales (no se muestra ningún valor):');
   for (const [k, v] of Object.entries(s)) {
-    console.log(`  ${k.padEnd(23)} ${String(v.largo).padStart(3)} caracteres${v.espacios ? '  ⚠ TIENE ESPACIOS' : ''}${v.guion ? '  (contiene "-")' : ''}`);
+    const esp = ESPERADO[k];
+    const marca = esp && v.largo !== esp ? `  ⚠ se esperaban ${esp}` : '';
+    console.log(`  ${k.padEnd(23)} ${String(v.largo).padStart(3)} caracteres${v.espacios ? '  ⚠ TIENE ESPACIOS' : ''}${v.guion ? '  (contiene "-")' : ''}${marca}`);
   }
 
   const avisos = [];
   for (const [k, v] of Object.entries(s)) {
     if (v.espacios) avisos.push(`${k} tiene espacios o saltos de línea: se pegó de más.`);
   }
+  // 34 caracteres es la firma del Client ID de OAuth 2.0, que está en OTRA
+  // sección de la misma pantalla y es la confusión más fácil de cometer.
+  if (s.X_API_KEY.largo === 34) {
+    avisos.push(
+      'X_API_KEY mide 34: ese es el largo del CLIENT ID de OAuth 2.0, no de la API Key. ' +
+      'En "Keys and tokens" hay dos bloques distintos; el que sirve acá es "Consumer Keys ' +
+      '-> API Key and Secret" (la API Key mide 25). El bloque "OAuth 2.0 Client ID and ' +
+      'Client Secret" no se usa en este bot.'
+    );
+  } else if (s.X_API_KEY.largo !== ESPERADO.X_API_KEY) {
+    avisos.push(`X_API_KEY mide ${s.X_API_KEY.largo} y una API Key de X mide ${ESPERADO.X_API_KEY}. Revisá de qué bloque la copiaste.`);
+  }
+  if (s.X_API_SECRET.largo !== ESPERADO.X_API_SECRET) {
+    avisos.push(`X_API_SECRET mide ${s.X_API_SECRET.largo} y se esperan ${ESPERADO.X_API_SECRET}. Si la API Key salió del bloque equivocado, el secreto probablemente también.`);
+  }
+  if (s.X_ACCESS_TOKEN_SECRET.largo !== ESPERADO.X_ACCESS_TOKEN_SECRET) {
+    avisos.push(`X_ACCESS_TOKEN_SECRET mide ${s.X_ACCESS_TOKEN_SECRET.largo} y se esperan ${ESPERADO.X_ACCESS_TOKEN_SECRET}.`);
+  }
   // El Access Token siempre empieza con el id numérico de la cuenta y un guion.
-  // Si no lo tiene, casi seguro es otra cosa: un Client ID o un Bearer Token.
   if (!s.X_ACCESS_TOKEN.guion) {
     avisos.push('X_ACCESS_TOKEN no contiene "-". Un Access Token de X tiene la forma "<id>-<...>". Revisá que no sea el Client ID ni el Bearer Token.');
   }
   if (s.X_API_KEY.guion) {
     avisos.push('X_API_KEY contiene "-", cosa rara en una API Key. ¿No será el Access Token puesto en el casillero equivocado?');
-  }
-  if (s.X_API_KEY.largo === s.X_API_SECRET.largo) {
-    avisos.push('X_API_KEY y X_API_SECRET miden lo mismo, y normalmente el secreto es bastante más largo. Verificá que no sea el mismo valor dos veces.');
   }
   if (avisos.length) {
     console.warn('\nPosibles problemas:');
