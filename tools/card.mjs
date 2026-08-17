@@ -205,49 +205,90 @@ export async function preMatchCard(d) {
   ctx.font = '19px sans-serif';
   ctx.fillText(`${d.league ?? ''}${d.gameNumber ? `  ·  Mapa ${d.gameNumber}` : ''}`, 60 + wTag + 26, 92);
 
-  // Equipos con sus logos.
-  await drawImageSafe(ctx, d.blueLogo, 70, 140, 120, 120);
-  await drawImageSafe(ctx, d.redLogo, W - 190, 140, 120, 120);
-  goldTitle(ctx, d.blue, 70, 315, 46, 3);
-  ctx.font = 'bold 46px serif';
-  const wRed = trackedWidth(ctx, d.red, 3);
-  goldTitle(ctx, d.red, W - 70 - wRed, 315, 46, 3);
+  // Equipos con sus logos y, sobre todo, DE QUÉ LADO juegan: en LoL el lado no
+  // es decorativo — cambia el orden del draft y el control del río.
+  await drawImageSafe(ctx, d.blueLogo, 70, 132, 104, 104);
+  await drawImageSafe(ctx, d.redLogo, W - 174, 132, 104, 104);
 
-  // Probabilidad como barra enfrentada.
+  goldTitle(ctx, d.blue, 70, 288, 42, 3);
+  ctx.font = 'bold 42px serif';
+  const wRed = trackedWidth(ctx, d.red, 3);
+  goldTitle(ctx, d.red, W - 70 - wRed, 288, 42, 3);
+
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillStyle = ACCENT;
+  tracked(ctx, 'LADO AZUL', 70, 312, 2);
+  ctx.fillStyle = RED;
+  const wLbl = trackedWidth(ctx, 'LADO ROJO', 2);
+  tracked(ctx, 'LADO ROJO', W - 70 - wLbl, 312, 2);
+
+  // Probabilidad: cada mitad con el color de su lado. Un tramo gris no dice a
+  // quién pertenece y obliga a leer el número para entender el dibujo.
   const bx = 70;
   const bw = W - 140;
-  const by = 370;
+  const by = 348;
+  const bh = 30;
   const pBlue = Math.max(0.04, Math.min(0.96, d.pBlue ?? 0.5));
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
-  ctx.fillRect(bx, by, bw, 26);
   ctx.fillStyle = ACCENT;
-  ctx.fillRect(bx, by, bw * pBlue, 26);
-  ctx.fillStyle = GOLD_DARK;
-  ctx.fillRect(bx + bw * pBlue - 1, by - 5, 2, 36);
+  ctx.fillRect(bx, by, bw * pBlue, bh);
+  ctx.fillStyle = RED;
+  ctx.fillRect(bx + bw * pBlue, by, bw * (1 - pBlue), bh);
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(bx + bw * pBlue - 1.5, by - 6, 3, bh + 12);
 
-  ctx.font = 'bold 22px sans-serif';
+  ctx.font = 'bold 21px sans-serif';
   ctx.fillStyle = INK;
-  ctx.fillText(`${Math.round(pBlue * 100)}%`, bx + 12, by + 19);
-  ctx.fillStyle = CREAM;
+  ctx.fillText(`${Math.round(pBlue * 100)}%`, bx + 12, by + 21);
   ctx.textAlign = 'right';
-  ctx.fillText(`${Math.round((1 - pBlue) * 100)}%`, bx + bw - 12, by + 19);
+  ctx.fillText(`${Math.round((1 - pBlue) * 100)}%`, bx + bw - 12, by + 21);
   ctx.textAlign = 'left';
 
-  ctx.font = '17px sans-serif';
+  ctx.font = '15px sans-serif';
   ctx.fillStyle = CREAM;
-  ctx.fillText('PROBABILIDAD DE VICTORIA', bx, by - 16);
+  tracked(ctx, 'PROBABILIDAD DE VICTORIA', bx, by - 14, 1.5);
 
-  rule(ctx, 70, 455, W - 140);
-  ctx.font = '22px sans-serif';
-  ctx.fillStyle = GOLD_LITE;
-  if (d.draftLine) ctx.fillText(String(d.draftLine).slice(0, 74), 70, 505);
-  ctx.fillStyle = CREAM;
-  ctx.font = '21px sans-serif';
-  if (d.keyLine) ctx.fillText(String(d.keyLine).slice(0, 78), 70, 545);
+  rule(ctx, 70, 412, W - 140);
 
-  ctx.font = '16px sans-serif';
+  // Bloque comparativo: en qué es fuerte y en qué es floja cada comp.
+  const col = (x, code, prof, color) => {
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = color;
+    ctx.fillText(code, x, 452);
+
+    let y = 484;
+    const line = (etiqueta, valor, c) => {
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillStyle = GOLD_DARK;
+      tracked(ctx, etiqueta, x, y, 1.5);
+      ctx.font = '19px sans-serif';
+      ctx.fillStyle = c;
+      ctx.fillText(valor, x + 78, y);
+      y += 30;
+    };
+    if (prof?.strong?.length) line('FUERTE', prof.strong.join(' · '), GOLD_LITE);
+    if (prof?.weak?.length) line('FLOJO', prof.weak.join(' · '), CREAM);
+    if (prof?.flags?.length) line('OJO', prof.flags.join(' · '), RED);
+    if (!prof?.strong?.length && !prof?.weak?.length && !prof?.flags?.length) {
+      ctx.font = '18px sans-serif';
+      ctx.fillStyle = CREAM;
+      ctx.fillText('Perfil parejo, sin eje destacado', x, y);
+    }
+  };
+  col(70, d.blue, d.blueProfile, ACCENT);
+  col(W / 2 + 20, d.red, d.redProfile, RED);
+
+  // La clave del matchup, al pie.
+  if (d.keyLine) {
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = GOLD_LITE;
+    ctx.fillText(String(d.keyLine).slice(0, 84), 70, H - 62);
+  }
+
+  ctx.font = '15px sans-serif';
   ctx.fillStyle = GOLD_DARK;
-  tracked(ctx, 'CHECKMATCH LOL', 70, H - 60, 3);
+  ctx.textAlign = 'right';
+  tracked(ctx, 'CHECKMATCH LOL', W - 250, H - 62, 3);
+  ctx.textAlign = 'left';
   return canvas.toBuffer('image/png');
 }
 

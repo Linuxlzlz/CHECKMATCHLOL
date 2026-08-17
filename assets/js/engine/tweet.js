@@ -173,6 +173,59 @@ export function mvpOf(merged, sides, winnerSide) {
 }
 
 /* ------------------------------------------------------------------ *
+ * perfil de una comp
+ * ------------------------------------------------------------------ */
+
+const AXIS_ES = {
+  teamfight: 'Teamfight',
+  pick: 'Pick',
+  split: 'Split',
+  siege: 'Asedio',
+  scaling: 'Escalado',
+};
+
+/**
+ * En qué es fuerte y en qué es floja una composición.
+ *
+ * Se mide contra la REFERENCIA, no contra el rival: es la pregunta "¿qué clase de
+ * comp es esta?", que es distinta de "¿quién gana el matchup?". Para lo segundo
+ * está el Δ del índice, que ya va en el texto.
+ *
+ * El umbral de 0.4 sd existe para no llamar "fuerte" a algo que está en el
+ * promedio. Un eje que no se despega no dice nada y es mejor callarlo.
+ */
+export function compProfile(sideScore, axes, sideKey) {
+  const z = sideScore?.z ?? {};
+  const ranked = Object.entries(z)
+    .map(([axis, v]) => ({ axis, z: v, label: AXIS_ES[axis] ?? axis }))
+    .sort((a, b) => b.z - a.z);
+
+  const strong = ranked.filter((r) => r.z >= 0.4).slice(0, 2);
+  const weak = ranked.filter((r) => r.z <= -0.4).slice(-2).reverse();
+
+  // Hechos binarios de la tabla, que se leen mejor que cualquier z-score.
+  const flags = [];
+  const get = (id) => axes.find((a) => a.id === id);
+  const fl = get('frontline');
+  const eng = get('engage');
+  if (fl) {
+    const mine = sideKey === 'a' ? fl.a : fl.b;
+    if (mine === 0) flags.push('sin tanque');
+  }
+  if (eng) {
+    const mine = sideKey === 'a' ? eng.a : eng.b;
+    if (mine === 0) flags.push('sin inicio duro');
+  }
+
+  return {
+    strong: strong.map((r) => r.label),
+    weak: weak.map((r) => r.label),
+    flags,
+    primary: ranked[0]?.label ?? null,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * composición
  * ------------------------------------------------------------------ */
 

@@ -24,7 +24,7 @@ import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
 import { buildProbability } from './probability.js';
-import { preMatchTweet, postMatchTweet, keyFactOf, mvpOf } from './tweet.js';
+import { preMatchTweet, postMatchTweet, keyFactOf, mvpOf, compProfile } from './tweet.js';
 
 const KEY = 'cml:wire:v1';
 const MAX_QUEUE = 60;
@@ -247,6 +247,9 @@ export async function tick({
               ? `Draft: ${score.tfFavors} +${Math.abs(score.tfDelta).toFixed(2)} sd en teamfight`
               : 'Draft parejo: el índice no elige lado',
             keyLine: edges?.[0] ? `Clave: ${edges[0].label} (${edges[0].side})` : null,
+            // Perfil de cada comp, para el bloque comparativo de abajo.
+            blueProfile: compProfile(score.sides[0], axes, 'a'),
+            redProfile: compProfile(score.sides[1], axes, 'b'),
           },
           ...t,
         })) added++;
