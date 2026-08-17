@@ -16,7 +16,8 @@
  */
 
 import {
-  LEAGUES, getLive, getEventDetails, getWindow, getDetails, feedTimestamp, secure, getRosterIndex,
+  LEAGUES, getLive, getSchedule, getEventDetails, getWindow, getDetails, feedTimestamp, secure,
+  getRosterIndex,
 } from '../api.js';
 import { scoreDraft } from './index-score.js';
 import { structuralAxes, concentrationAndWindow } from './structural.js';
@@ -112,23 +113,51 @@ function buildSides(ev, meta, rosterIndex) {
  *
  * @param {object} opts.standingsFor  (tournamentId) => standings, para la calidad de equipos
  */
-export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
+export async function tick({
+  leagues = LEAGUES, recordFor = null, backfillHours = 0, matchIds = [], onlyKind = null,
+} = {}) {
   let added = 0;
   const wanted = new Set(leagues.map((l) => l.id));
 
-  let live;
-  try { live = await getLive(); } catch { return 0; }
-  const events = (live?.data?.schedule?.events ?? []).filter((e) => wanted.has(e.league?.id));
-  if (!events.length) return 0;
+  // Qué partidos mirar. En operación normal alcanza con los que están en vivo,
+  // pero para probar hace falta poder alcanzar uno que ya terminó: cuando el
+  // evento sale de getLive, el mapa deja de ser visible para siempre.
+  const ids = new Set(matchIds.filter(Boolean));
 
+  if (!matchIds.length) {
+    try {
+      const live = await getLive();
+      for (const e of live?.data?.schedule?.events ?? []) {
+        if (wanted.has(e.league?.id) && e.match?.id) ids.add(e.match.id);
+      }
+    } catch { /* seguimos con el backfill si lo hay */ }
+
+    if (backfillHours > 0) {
+      const since = Date.now() - backfillHours * 3600_000;
+      for (const l of leagues) {
+        try {
+          const sched = await getSchedule(l.id);
+          for (const e of sched?.data?.schedule?.events ?? []) {
+            if (!e.match?.id || e.state === 'unstarted') continue;
+            if (new Date(e.startTime).getTime() >= since) ids.add(e.match.id);
+          }
+        } catch { /* una liga que falla no frena al resto */ }
+      }
+    }
+  }
+
+  if (!ids.size) return 0;
   const rosterIndex = await getRosterIndex().catch(() => ({}));
 
-  for (const e of events) {
-    const league = LEAGUES.find((l) => l.id === e.league?.id);
+  for (const matchId of ids) {
     let det;
-    try { det = await getEventDetails(e.match?.id); } catch { continue; }
+    try { det = await getEventDetails(matchId); } catch { continue; }
     const ev = det?.data?.event;
     if (!ev?.match) continue;
+    // La liga sale del propio detalle: así funciona igual venga el partido del
+    // feed en vivo, del backfill o de un id pasado a mano.
+    const league = LEAGUES.find((l) => l.id === ev.league?.id);
+    if (!league || (!matchIds.length && !wanted.has(league.id))) continue;
 
     for (const game of ev.match.games ?? []) {
       if (game.state === 'unstarted' || game.state === 'unneeded') continue;
@@ -137,7 +166,9 @@ export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
       const preId = `${game.id}:pre`;
       const postId = `${game.id}:post`;
       const already = read().posts;
-      if (already[preId] && (game.state !== 'completed' || already[postId])) continue;
+      const needPre = !already[preId] && onlyKind !== 'post';
+      const needPost = game.state === 'completed' && !already[postId] && onlyKind !== 'pre';
+      if (!needPre && !needPost) continue;
 
       let win;
       try { win = await getWindow(game.id); } catch { continue; }
@@ -152,7 +183,7 @@ export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
       const axes = structuralAxes(sides.a, sides.b);
       const { edges } = concentrationAndWindow(sides.a, sides.b, axes);
 
-      if (!already[preId]) {
+      if (needPre) {
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
         const prob = buildProbability({
           recordA: rec?.a ?? null,
@@ -163,7 +194,7 @@ export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
         });
         const t = preMatchTweet({ league, ev, game, blue: sides.a, red: sides.b, score, prob, edges });
         if (push(preId, {
-          gameId: game.id, matchId: ev.id ?? e.match?.id, league: league?.key,
+          gameId: game.id, matchId: ev.id ?? matchId, league: league?.key,
           teams: `${sides.a.team} vs ${sides.b.team}`, gameNumber: game.number,
           logos: [sides.a.image, sides.b.image],
           ...t,
@@ -171,7 +202,7 @@ export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
       }
 
       // --- mapa terminado: tweet de cierre con MVP ---
-      if (game.state === 'completed' && !already[postId]) {
+      if (needPost) {
         const ts = feedTimestamp(90);
         let w2 = null;
         let d2 = null;
@@ -208,7 +239,7 @@ export async function tick({ leagues = LEAGUES, recordFor = null } = {}) {
 
         const t = postMatchTweet({ league, blue: sides.a, red: sides.b, winner, st, minute, mvp, keyFact });
         if (push(postId, {
-          gameId: game.id, matchId: ev.id ?? e.match?.id, league: league?.key,
+          gameId: game.id, matchId: ev.id ?? matchId, league: league?.key,
           teams: `${sides.a.team} vs ${sides.b.team}`, gameNumber: game.number,
           logos: [sides.a.image, sides.b.image],
           mvp: mvp ? {

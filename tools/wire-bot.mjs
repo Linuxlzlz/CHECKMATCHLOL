@@ -213,8 +213,23 @@ async function main() {
   const { LEAGUES } = await import('../assets/js/api.js');
 
   const leagues = resolveLeagues(process.env.WIRE_LEAGUES, LEAGUES);
+
+  // Para PROBAR hace falta alcanzar un partido que ya terminó: en operación
+  // normal el vigilante solo ve lo que está en vivo, y cuando el evento sale del
+  // feed en vivo ese mapa queda fuera de alcance para siempre.
+  const backfillHours = num(process.env.WIRE_BACKFILL, 0);
+  const matchIds = (process.env.WIRE_MATCH ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const onlyKind = (process.env.WIRE_ONLY ?? '').trim().toLowerCase() || null;
+  if (onlyKind && !['pre', 'post'].includes(onlyKind)) {
+    throw new Error(`WIRE_ONLY="${onlyKind}" no vale. Usá "pre", "post", o dejala vacía.`);
+  }
+
   console.log(`Vigilando: ${leagues.map((l) => l.key).join(', ')}`);
-  const added = await wire.tick({ leagues });
+  if (matchIds.length) console.log(`Partidos forzados: ${matchIds.join(', ')}`);
+  if (backfillHours) console.log(`Backfill: ${backfillHours} h hacia atrás`);
+  if (onlyKind) console.log(`Solo tweets de tipo: ${onlyKind}`);
+
+  const added = await wire.tick({ leagues, recordFor: null, backfillHours, matchIds, onlyKind });
   console.log(`Nuevas publicaciones en cola: ${added}`);
 
   const live = String(process.env.WIRE_LIVE ?? '').toLowerCase() === 'true';

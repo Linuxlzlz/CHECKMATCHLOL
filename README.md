@@ -437,6 +437,19 @@ Las **variables** (no son secretos, se ven en claro) controlan el comportamiento
 | `WIRE_MAX_PER_RUN` | `4` | Tope de publicaciones por corrida. |
 | `WIRE_MEDIA` | `true` | Si adjunta logos y foto del MVP. |
 
+Y tres más que existen **solo para probar**. En operación normal el vigilante mira únicamente lo que
+está en vivo, así que en cuanto un partido sale del feed en vivo queda fuera de alcance: sin esto no
+hay forma de ensayar con un partido concreto.
+
+| Variable | Ejemplo | Para qué |
+|---|---|---|
+| `WIRE_BACKFILL` | `24` | Horas hacia atrás a rastrear, además de lo que esté en vivo. |
+| `WIRE_MATCH` | `115564797163821194` | Fuerza uno o más partidos por id, ignorando todo lo demás. |
+| `WIRE_ONLY` | `post` | Genera solo los tweets de cierre (`post`) o solo los de arranque (`pre`). |
+
+Borralas cuando termines de probar: dejar `WIRE_BACKFILL` puesto hace que cada corrida vuelva a
+recorrer el calendario entero sin necesidad.
+
 Se recomienda este orden: `WIRE_VERIFY=true` una corrida → `WIRE_VERIFY=false` y mirar dos o tres
 simulacros en los logs → recién ahí `WIRE_LIVE=true`.
 
