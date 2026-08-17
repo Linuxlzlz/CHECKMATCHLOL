@@ -1,0 +1,41 @@
+# Publica el sitio en GitHub Pages.
+#
+# Hace falta porque la fuente de Pages está puesta en "GitHub Actions": con esa
+# opción GitHub deja de desplegar solo desde la rama y publica únicamente lo que
+# suba un workflow. Sin este archivo el sitio se queda congelado en el último
+# despliegue y los push siguientes no cambian nada, sin ningún aviso.
+#
+# No hay paso de build: el sitio es HTML y módulos ES nativos, así que se sube
+# el repo tal cual, igual que hacía el despliegue por rama.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  # Si entran dos push seguidos, vale el último. No se cancela el que está en
+  # curso para no dejar el sitio a medio publicar.
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+      - id: deployment
+        uses: actions/deploy-pages@v4
