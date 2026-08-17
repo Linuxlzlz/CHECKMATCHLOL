@@ -356,7 +356,13 @@ async function main() {
           'solo lectura para siempre.'
         );
       } else if (/\b429\b/.test(e.message)) {
-        console.error('Un 429 es cuota agotada. Esperá a que se renueve la ventana.');
+        console.error('Un 429 es límite de frecuencia. Esperá a que se renueve la ventana.');
+      } else if (/\b402\b/.test(e.message)) {
+        console.error(
+          'Un 402 son CRÉDITOS agotados, no un problema de configuración. Ojo que esta\n' +
+          'comprobación también consume: cada corrida sube una imagen de prueba. Una vez\n' +
+          'que dio OK, no hace falta repetirla.'
+        );
       }
       process.exitCode = 1;
     }
@@ -416,6 +422,26 @@ async function main() {
   }
 
   const creds = readCreds();
+
+  // Freno por cuota agotada.
+  //
+  // Un 402 no se arregla reintentando: la cuota se repone con el tiempo o
+  // pagando. Sin esto, el cron cada 10 minutos hace 144 intentos fallidos por
+  // día, y cada intento puede consumir crédito. Se anota la pausa en el mismo
+  // estado que la cola, así sobrevive entre corridas.
+  const PAUSE_KEY = 'cml:wire:paused-until';
+  const pausedUntil = Number(localStorage.getItem(PAUSE_KEY) ?? 0);
+  if (pausedUntil > Date.now()) {
+    const faltan = Math.ceil((pausedUntil - Date.now()) / 60000);
+    console.warn(
+      `\nPublicación en pausa por cuota agotada (402). Se reanuda en ~${faltan} min.\n` +
+      'La cola se siguió llenando: nada se pierde, solo se pospone.\n' +
+      `Para forzar antes, borrá "${PAUSE_KEY}" de tools/wire-state.json.`
+    );
+    store.flush();
+    return;
+  }
+
   let posted = 0;
   for (const p of pending.slice(0, maxPerRun)) {
     try {
@@ -434,6 +460,25 @@ async function main() {
       // Un fallo no debe bloquear la cola entera ni reintentar en bucle: se deja
       // sin marcar y la próxima corrida lo vuelve a intentar.
       console.error(`FALLÓ ${p.id}: ${e.message}`);
+
+      if (/\b402\b/.test(e.message) || /credits.depleted/i.test(e.message)) {
+        const horas = num(process.env.WIRE_PAUSE_HOURS, 6);
+        localStorage.setItem(PAUSE_KEY, String(Date.now() + horas * 3600_000));
+        console.error(
+          `\nCUOTA AGOTADA. Se pausa la publicación ${horas} h para no quemar más crédito.\n` +
+          'Esto no es un error del bot: la API de X trabaja con créditos y los de esta\n' +
+          'cuenta se terminaron. Mirá "Uso" y "Créditos" en el portal de desarrollador.\n' +
+          'Mientras tanto:\n' +
+          '  - WIRE_MEDIA=false abarata cada publicación: subir imágenes también consume.\n' +
+          '  - WIRE_LEAGUES con una sola liga baja mucho el volumen.\n' +
+          '  - Con WIRE_LIVE=false la cola se sigue llenando y publicás a mano desde #/wire.'
+        );
+        break;   // no seguir con el resto de la cola en esta corrida
+      }
+      if (/\b429\b/.test(e.message)) {
+        console.error('429: límite de frecuencia. La próxima corrida lo reintenta.');
+        break;
+      }
     }
   }
   console.log(`\nPublicados: ${posted}`);

@@ -455,10 +455,21 @@ simulacros en los logs → recién ahí `WIRE_LIVE=true`.
 
 ### El límite de la API es el que define el alcance
 
-El tier gratuito de X permite del orden de **17 publicaciones por día**. Con 6 ligas y dos tweets
-por mapa, un día cargado de LPL solo ya lo supera. Las opciones son acotar con `WIRE_LEAGUES` a una
-o dos ligas, o pagar un tier superior. Conviene decidirlo antes de encenderlo, porque el bot no sabe
-cuánto le queda de cuota: solo va a ver errores 429 y dejar las publicaciones sin marcar.
+La API de X funciona con **créditos**, y el tier gratuito trae muy pocos. Con 6 ligas y dos tweets
+por mapa se agotan enseguida, y cuando pasa la respuesta es `402 credits depleted`.
+
+Un 402 no se arregla reintentando, así que el bot **se pausa 6 horas** al recibirlo (`WIRE_PAUSE_HOURS`
+lo cambia). Sin ese freno, el cron cada 10 minutos haría 144 intentos fallidos por día, y cada
+intento puede consumir crédito. La cola se sigue llenando durante la pausa: nada se pierde.
+
+Para estirar la cuota:
+
+- `WIRE_MEDIA=false` — subir imágenes también consume; el texto solo sale mucho más barato.
+- `WIRE_LEAGUES` con una sola liga.
+- `WIRE_LIVE=false` — la cola se llena igual y publicás a mano desde `#/wire`, sin gastar nada.
+
+Ojo también con `WIRE_VERIFY`: cada corrida sube una imagen de prueba y eso consume. Una vez que dio
+OK, no hace falta repetirla.
 
 ### Los hashtags de equipo son una tabla a mano
 
