@@ -255,6 +255,19 @@ export async function preMatchCard(d) {
     ctx.font = 'bold 21px sans-serif';
     ctx.fillStyle = d.favorite.side === 'blue' ? ACCENT : RED;
     ctx.fillText(`${d.favorite.team}  ${Math.round(d.favorite.p * 100)}%`, bx + wFav + 16, by + 48);
+  } else {
+    // Sin favorito no se deja el hueco: se dice por qué. "FAVORITO KRX 50%" era
+    // peor que no decir nada, porque el 50% desmiente a la palabra FAVORITO.
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = GOLD_DARK;
+    const wSin = trackedWidth(ctx, 'SIN FAVORITO', 2);
+    tracked(ctx, 'SIN FAVORITO', bx, by + 48, 2);
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = CREAM;
+    ctx.fillText(
+      d.sinInsumos?.motivo ?? 'El modelo no separa a estos dos equipos.',
+      bx + wSin + 16, by + 47
+    );
   }
 
   // --- estado de forma ---

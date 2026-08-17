@@ -116,15 +116,33 @@ export async function getRosterIndex() {
 
 /** Torneo vigente de una liga: el de startDate más reciente que ya empezó. */
 export async function getCurrentTournament(leagueId) {
+  const [actual] = await getRecentTournaments(leagueId, 1);
+  return actual ?? null;
+}
+
+/**
+ * Los N torneos más recientes de una liga, del más nuevo al más viejo.
+ *
+ * Existe porque el corpus se quedaba corto justo donde más falta hacía. Al
+ * indexar solo el torneo vigente, ligas como LCK quedaban con 23 series, y con
+ * 23 series el récord de equipo se mide con un intervalo de [22, 59]: no se
+ * puede afirmar nada. Cada liga tiene dos splits previos del mismo año
+ * disponibles en la API, y sumarlos triplica la muestra.
+ *
+ * Ojo con para qué se usa lo que devuelve. Sumar splits está bien para medir
+ * FUERZA DE EQUIPO, que es lo que el récord mide y que cambia lento. NO está
+ * bien para medir campeones ni composiciones: otro split es otro parche y otro
+ * meta, y esas mediciones filtran por parche por su cuenta.
+ */
+export async function getRecentTournaments(leagueId, count = 1) {
   const data = await getTournamentsForLeague(leagueId);
   const list = data?.data?.leagues?.[0]?.tournaments ?? [];
-  if (!list.length) return null;
+  if (!list.length) return [];
   const today = new Date().toISOString().slice(0, 10);
-  const started = list
-    .filter((t) => t.startDate <= today)
-    .sort((a, b) => b.startDate.localeCompare(a.startDate));
+  const porFecha = (a, b) => b.startDate.localeCompare(a.startDate);
+  const started = list.filter((t) => t.startDate <= today).sort(porFecha);
   // Si ninguno empezó (pretemporada), devolvemos el más próximo.
-  return started[0] ?? list.sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+  return (started.length ? started : [...list].sort(porFecha)).slice(0, count);
 }
 
 /* ------------------------------------------------------------------ *

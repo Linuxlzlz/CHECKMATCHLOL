@@ -8,6 +8,7 @@
 
 import {
   LEAGUES, getSchedule, getLive, getEventDetails, getStandings, getCurrentTournament,
+  getRecentTournaments,
   getWindow, getDetails, feedTimestamp, initDDragon, championIcon, championName, secure,
   getRosterIndex, itemIcon,
 } from './api.js';
@@ -2680,6 +2681,15 @@ function openChampionEditor(players, riotMap) {
   );
 }
 
+/**
+ * Cuántos splits se traen al indexar una liga.
+ *
+ * Tres: el vigente y los dos anteriores del mismo año, que es lo que la API
+ * ofrece sin irse a 2025. Con uno solo el corpus quedaba en 142 series y las
+ * mediciones por liga salían con intervalos que cruzan el 50% en casi todas.
+ */
+const SPLITS_A_INDEXAR = 3;
+
 /** Indexar otra liga para que los campeones sin muestra local tengan respaldo. */
 function openLeaguePicker() {
   const cached = new Set(cachedIndices().map((i) => i.leagueId));
@@ -2705,13 +2715,25 @@ function openLeaguePicker() {
       b.disabled = true;
       b.textContent = 'Indexando…';
       try {
-        const t = await getCurrentTournament(league.id).catch(() => null);
-        await buildTournamentIndex(league.id, t, {
-          league,
-          onProgress: (p) => { b.textContent = `${p.done ?? 0}${p.total ? `/${p.total}` : ''}`; },
-        });
+        // Se indexa el split vigente Y los dos anteriores. Con uno solo, ligas
+        // como LCK quedaban en 23 series y el récord de equipo se medía con un
+        // intervalo de [22, 59] — o sea, no se medía. Cada torneo se guarda
+        // aparte, así que las medidas por parche siguen pudiendo filtrar.
+        const ts = await getRecentTournaments(league.id, SPLITS_A_INDEXAR).catch(() => []);
+        if (!ts.length) throw new Error('La liga no devolvió torneos.');
+        let hechos = 0;
+        for (const t of ts) {
+          await buildTournamentIndex(league.id, t, {
+            league,
+            onProgress: (p) => {
+              const paso = `${hechos + 1}/${ts.length}`;
+              b.textContent = `${paso} · ${p.done ?? 0}${p.total ? `/${p.total}` : ''}`;
+            },
+          });
+          hechos++;
+        }
         state.globalIndex = aggregateIndices(cachedIndices());
-        b.textContent = 'listo';
+        b.textContent = `listo (${hechos} split${hechos === 1 ? '' : 's'})`;
         if (state.matchId) openMatch(state.matchId, { force: true });
       } catch (e) {
         b.textContent = 'falló';

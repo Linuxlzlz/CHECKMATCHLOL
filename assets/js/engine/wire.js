@@ -354,11 +354,25 @@ export async function tick({
               : 'Draft parejo: el índice no elige lado',
             keyLine: edges?.[0] ? `Clave: ${edges[0].label} (${edges[0].side})` : null,
             // Quién es favorito, dicho sin que haya que interpretar la barra.
-            favorite: {
-              team: prob.p >= 0.5 ? sides.a.team : sides.b.team,
-              side: prob.p >= 0.5 ? 'blue' : 'red',
-              p: Math.max(prob.p, 1 - prob.p),
-            },
+            //
+            // Por debajo de 53% no se declara favorito: la tarjeta llegó a
+            // imprimir "FAVORITO KRX 50%", que es una contradicción impresa en
+            // pantalla. Si el modelo no separa, lo honesto es decir eso y no
+            // coronar a alguien por el redondeo.
+            favorite: Math.max(prob.p, 1 - prob.p) >= 0.53
+              ? {
+                team: prob.p >= 0.5 ? sides.a.team : sides.b.team,
+                side: prob.p >= 0.5 ? 'blue' : 'red',
+                p: Math.max(prob.p, 1 - prob.p),
+              }
+              : null,
+            // Cuando ningún componente aportó, la tarjeta tiene que decirlo en
+            // vez de publicar un 50-50 mudo que se lee como análisis.
+            sinInsumos: prob.components.every((c) => !c.contrib) ? {
+              motivo: prob.hasQuality
+                ? 'Los ejes medidos no separan a estos dos equipos.'
+                : 'Sin récord disponible para este torneo.',
+            } : null,
             // Estado de forma: récord del split y racha reciente.
             form: { blue: formA, red: formB },
             // Cara a cara por eje: teamfight, pick, split, asedio, escalado.
