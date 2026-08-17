@@ -111,38 +111,67 @@ function push(id, entry, regenerate = false) {
  * Importa además por una razón que no es estética: el bot venía construyendo la
  * probabilidad SIN el componente de calidad de equipos —el que más pesa— porque
  * nunca le pasaba los récords. Esto lo alimenta.
+ *
+ * CUIDADO CON LA CLAVE. Los dos endpoints describen al mismo equipo con campos
+ * distintos, y no se solapan donde uno esperaría:
+ *
+ *   getSchedule       name, code, image, result, record   ← trae récord, NO trae id
+ *   getEventDetails   id, name, code, image, result       ← trae id, NO trae récord
+ *
+ * Esto estuvo cruzando por `id` contra el calendario, que no lo tiene en ninguno
+ * de sus 136 equipos, así que el mapa quedaba vacío y devolvía null siempre: el
+ * componente de calidad de equipos nunca llegó a entrar en el bot ni una vez.
+ * Se cruza por `code`, que es el único campo que los dos lados comparten.
  */
 const formCache = new Map();
-async function teamForm(leagueId, teamIds) {
+async function teamForm(leagueId, teamCodes, matchId = null) {
   const key = `${leagueId}`;
   if (!formCache.has(key)) {
     const porEquipo = new Map();
+    const oficial = new Map();
     try {
       const sched = await getSchedule(leagueId);
       const evs = (sched?.data?.schedule?.events ?? [])
-        .filter((e) => e.state === 'completed' && e.match?.teams?.length === 2)
+        .filter((e) => e.match?.teams?.length === 2)
         .sort((a, b) => String(a.startTime ?? '').localeCompare(String(b.startTime ?? '')));
       for (const e of evs) {
         const [t1, t2] = e.match.teams;
+        // El récord que publica la liga para ESTE partido: es el que corresponde
+        // al bloque en curso, no al año entero, y es el que ve cualquiera que
+        // mire la tabla. Se guarda por partido para poder usar el del momento.
+        if (e.match?.id) {
+          oficial.set(String(e.match.id), Object.fromEntries(
+            [t1, t2].filter((t) => t?.code && t.record).map((t) => [t.code, { ...t.record }])
+          ));
+        }
+        if (e.state !== 'completed') continue;
         const w1 = t1.result?.gameWins ?? 0;
         const w2 = t2.result?.gameWins ?? 0;
         if (w1 === w2) continue;              // sin ganador claro no suma
         for (const [t, gano] of [[t1, w1 > w2], [t2, w2 > w1]]) {
-          if (!t?.id) continue;
-          if (!porEquipo.has(t.id)) porEquipo.set(t.id, { wins: 0, losses: 0, last: [] });
-          const r = porEquipo.get(t.id);
+          if (!t?.code) continue;
+          if (!porEquipo.has(t.code)) porEquipo.set(t.code, { wins: 0, losses: 0, last: [] });
+          const r = porEquipo.get(t.code);
           if (gano) r.wins++; else r.losses++;
           r.last.push(gano ? 'V' : 'D');
         }
       }
     } catch { /* sin calendario no hay forma, y el resto sigue */ }
-    formCache.set(key, porEquipo);
+    formCache.set(key, { porEquipo, oficial });
   }
-  const m = formCache.get(key);
-  return teamIds.map((id) => {
-    const r = m.get(id);
-    if (!r) return null;
-    return { wins: r.wins, losses: r.losses, last: r.last.slice(-5) };
+  const { porEquipo, oficial } = formCache.get(key);
+  const delPartido = matchId ? oficial.get(String(matchId)) : null;
+  return teamCodes.map((code) => {
+    const r = porEquipo.get(code);
+    const of = delPartido?.[code];
+    if (!r && !of) return null;
+    // Récord: el oficial de la liga si está; si no, el contado del calendario.
+    // La racha siempre sale del calendario, que es lo único que la tiene.
+    return {
+      wins: of?.wins ?? r.wins,
+      losses: of?.losses ?? r.losses,
+      last: (r?.last ?? []).slice(-5),
+    };
   });
 }
 
@@ -293,7 +322,9 @@ export async function tick({
       if (needPre) {
         // La forma del split alimenta el componente de calidad de equipos, que es
         // el que más pesa y que el bot venía dejando vacío.
-        const [formA, formB] = await teamForm(league.id, [sides.a.teamId, sides.b.teamId]);
+        const [formA, formB] = await teamForm(
+          league.id, [sides.a.team, sides.b.team], ev.match?.id ?? ev.id ?? null
+        );
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
         const prob = buildProbability({
           recordA: rec?.a ?? formA ?? null,
