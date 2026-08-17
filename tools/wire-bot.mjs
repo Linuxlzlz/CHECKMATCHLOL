@@ -314,18 +314,35 @@ async function deliverFree(pending) {
   let sent;
   try { sent = JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { sent = {}; }
 
+  // Los webhooks de Discord aceptan unas 5 peticiones cada 2 segundos. Con seis
+  // ligas, una tanda de avisos juntos pasa ese techo y empiezan los 429. Se
+  // manda de a poco y con pausa: no hay apuro, el partido ya terminó.
+  const max = num(process.env.WIRE_MAX_NOTIFY, 8);
+  const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+
   let n = 0;
   for (const p of pending) {
     if (sent[p.id]) continue;
+    if (n >= max) {
+      console.log(`Quedan ${pending.filter((x) => !sent[x.id]).length - n} avisos para la próxima corrida (tope ${max}).`);
+      break;
+    }
     try {
       const card = await renderCard(p);
       if (tgToken && tgChat) await sendTelegram(p, tgToken, tgChat, card);
       if (discord) await sendDiscord(p, discord, card);
       sent[p.id] = new Date().toISOString();
       n++;
-      console.log(`avisado ${p.id}`);
+      console.log(`avisado ${p.id}${card ? ' (con tarjeta)' : ''}`);
+      await pausa(1300);
     } catch (e) {
       console.warn(`  no se pudo avisar ${p.id}: ${e.message}`);
+      // Un 429 no se arregla insistiendo dentro de la misma tanda.
+      if (/\b429\b/.test(e.message)) {
+        console.warn('  límite de frecuencia: el resto queda para la próxima corrida.');
+        break;
+      }
+      await pausa(800);
     }
   }
   localStorage.setItem(KEY, JSON.stringify(sent));
