@@ -579,3 +579,38 @@ code {
 .nar-table tr.best td { background: rgba(62,207,142,.07); }
 .nar-table tr.best td:first-child { box-shadow: inset 2px 0 0 var(--green); }
 .nar-table tr.worse td { opacity: .62; }
+
+/* --- wire: la cola de publicaciones --------------------------------- */
+.wire-post.done { opacity: .72; }
+.tweet-card {
+  background: var(--bg-inset); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px; display: grid; gap: 10px;
+}
+.tweet-logos { display: flex; align-items: center; gap: 8px; }
+.tweet-logos img { width: 34px; height: 34px; object-fit: contain; }
+.tweet-logos .tweet-mvp {
+  width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
+  border: 2px solid var(--gold); margin-left: auto;
+}
+.tweet-text {
+  margin: 0; font: inherit; font-size: 14px; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+.tweet-meta { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
+.wire-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; align-items: center; }
+.wire-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+
+.mvp-box {
+  margin-top: 12px; padding: 12px 14px; border-radius: 9px;
+  background: rgba(224,182,74,.05); border: 1px solid rgba(224,182,74,.22);
+}
+.mvp-head { display: flex; align-items: center; gap: 12px; margin-bottom: 7px; }
+.mvp-head img {
+  width: 54px; height: 54px; border-radius: 50%; object-fit: cover;
+  border: 2px solid var(--gold); flex: none;
+}
+.mvp-rating {
+  margin-left: auto; font-family: var(--mono); font-size: 26px; font-weight: 700;
+  color: var(--gold); line-height: 1; white-space: nowrap;
+}
+.mvp-rating span { font-size: 12px; color: var(--text-mute); }

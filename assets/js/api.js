@@ -95,10 +95,16 @@ export async function getRosterIndex() {
         name: t.name,
         code: t.code,
         slug: t.slug,
+        image: secure(t.image),
         players: (t.players ?? []).map((p) => ({
           id: p.id,
           name: p.summonerName,
           role: p.role,
+          // La foto oficial del jugador viene en este mismo endpoint. No hace
+          // falta Leaguepedia, que además responde con rate limit desde acá.
+          image: secure(p.image),
+          firstName: p.firstName,
+          lastName: p.lastName,
         })),
       };
     }

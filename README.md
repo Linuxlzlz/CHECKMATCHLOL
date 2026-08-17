@@ -371,6 +371,51 @@ forma sostenida, el número propio no aporta sobre el precio.
 - El índice de torneo depende de que la liga tenga partidos terminados en el split vigente.
 - Los ejes estructurales se derivan de una tabla de juicio, no de datos medidos.
 
+## Wire — la función oculta
+
+Ruta `#/wire`. No está enlazada desde ninguna parte del sitio: se llega escribiéndola.
+
+Vigila las 6 ligas pegada al poll que ya existe y encola una publicación en cada transición:
+
+- **Arranca un mapa** → tweet con la probabilidad de cada equipo, la lectura del draft, el
+  enfrentamiento clave, los logos de los dos equipos y los hashtags de liga y de equipo.
+- **Termina el mapa** → tweet con el resultado, la clave del mapa, y el **MVP** con su foto oficial,
+  KDA, participación en daño y oro, y una calificación.
+
+La cola vive en `localStorage` y es idempotente: un mapa que ya generó su tweet no lo vuelve a
+generar aunque el poll pase cien veces.
+
+### Fotos y logos: no hacen falta scrapers
+
+El endpoint `getTeams` del feed oficial **ya trae la foto de cada jugador y el logo de cada equipo**,
+con nombre y apellido. Leaguepedia no se usa: además de ser una segunda fuente que mantener,
+responde con `ratelimited` de forma sostenida desde este entorno.
+
+### La calificación del MVP es un número inventado, y se dice
+
+Se construye por componentes —participación en el daño, en kills y en el oro, más KDA, menos una
+penalización por muertes— con los pesos declarados en `engine/tweet.js`. **No están validados contra
+nada.** La diferencia con el resto del sitio es que este número es una etiqueta editorial: no entra
+en ninguna probabilidad ni se registra para calibrar. La escala se divide por el máximo alcanzable,
+así que un MVP típico cae entre 6.5 y 8.5 y el 10 es prácticamente inalcanzable.
+
+### Por qué el sitio no publica solo
+
+**Un sitio estático no puede postear en X.** La API pide OAuth con secretos de servidor, y cualquier
+credencial embarcada en el bundle la lee quien abra el código — GitHub Pages sirve el fuente tal
+cual. El wire deja cada tweet listo con su texto y las URLs de sus imágenes, y el último paso es un
+click en "Abrir en X", que abre el compositor con el texto ya puesto.
+
+Para que sea automático de punta a punta hace falta un proceso con credenciales, fuera del
+navegador. La forma más barata es un workflow de GitHub Actions con cron: los secretos van en
+*Settings → Secrets*, nunca en el repo. Ese pedazo no está construido — es la pieza que queda.
+
+### Los hashtags de equipo son una tabla a mano
+
+`TEAM_TAGS` en `engine/tweet.js`. Los hashtags oficiales cambian cada split y **ninguna API los
+expone**, así que están curados a mano y conviene revisarlos al empezar cada temporada. Los que no
+figuran caen al código del equipo (`#T1`, `#GEN`).
+
 ## Marca
 
 El logo es la marca de verificación dibujada como una **barra de error**: el check es el trazo, y

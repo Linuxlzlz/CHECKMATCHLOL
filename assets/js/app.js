@@ -29,6 +29,8 @@ import { buildProbability, bettingStance, layerDisagreement, draftWeightFrom } f
 import {
   evaluate as evaluateModels, readEvaluation, championScaling, championFighting,
 } from './engine/discovery.js';
+import * as wire from './engine/wire.js';
+import { intentUrl, teamTag } from './engine/tweet.js';
 import {
   buildTournamentIndex, championLayer, playerLayer, stackedRisk, clearIndexCache, rosterCheck,
   cachedIndices, aggregateIndices,
@@ -75,6 +77,11 @@ const state = {
   diagnostics: null,
   patchDiffKey: null,
   fixAll: null,
+  // Función oculta: el vigilante que arma los tweets. Se enciende entrando a
+  // #/wire y queda encendido en el navegador hasta que se apague.
+  wireOn: (() => { try { return localStorage.getItem('cml:wire:on') === '1'; } catch { return false; } })(),
+  wireBusy: false,
+  wireLast: null,
 };
 
 /* ------------------------------------------------------------------ *
@@ -85,6 +92,7 @@ const LAST_ROUTE_KEY = 'cml:route:v1';
 
 function routeHash() {
   if (state.view === 'ledger') return '#/registro';
+  if (state.view === 'wire') return '#/wire';
   return '#/' + [state.league.key, state.matchId, state.gameId].filter(Boolean).join('/');
 }
 
@@ -102,6 +110,8 @@ function parseRoute(hash) {
   const parts = (hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
   if (!parts.length) return null;
   if (parts[0] === 'registro') return { view: 'ledger' };
+  // Ruta oculta: no está enlazada en ningún lado, se llega escribiéndola.
+  if (parts[0] === 'wire') return { view: 'wire' };
   const league = LEAGUES.find((l) => l.key === parts[0]);
   if (!league) return null;
   return { view: 'match', league, matchId: parts[1] ?? null, gameId: parts[2] ?? null };
@@ -119,6 +129,15 @@ async function applyRoute(r) {
     state.matchId = null;
     renderMatchList();
     renderLedger();
+    return;
+  }
+  if (r.view === 'wire') {
+    state.view = 'wire';
+    state.matchId = null;
+    state.wireOn = true;
+    renderMatchList();
+    renderWire();
+    wireTick();
     return;
   }
   state.view = 'match';
@@ -417,7 +436,181 @@ async function pollLive() {
     if (state.view === 'match' && state.matchId && state.liveIds.has(state.matchId)) {
       openMatch(state.matchId, { quiet: true });
     }
+    if (state.wireOn) wireTick();
   } catch { /* el poll no debe romper la vista */ }
+}
+
+/* ------------------------------------------------------------------ *
+ * wire: la función oculta que arma los tweets
+ * ------------------------------------------------------------------ */
+
+/** Récords para el componente de calidad, desde el índice ya construido. */
+function recordFor(teamIdA, teamIdB) {
+  const find = (id) => {
+    for (const idx of cachedIndices()) {
+      const t = idx.teams?.[id];
+      if (t?.attributed >= 4) return { wins: t.wins, losses: t.attributed - t.wins };
+    }
+    return null;
+  };
+  return { a: find(teamIdA), b: find(teamIdB) };
+}
+
+async function wireTick() {
+  if (!state.wireOn || state.wireBusy) return;
+  state.wireBusy = true;
+  try {
+    const added = await wire.tick({ recordFor });
+    state.wireLast = { at: Date.now(), added };
+    const pending = wire.queue().filter((p) => !p.posted).length;
+    const pill = $('#wire-pill');
+    if (pill) {
+      pill.hidden = !pending;
+      pill.textContent = `${pending} sin publicar`;
+      pill.className = pending ? 'pill pill-live' : 'pill pill-idle';
+    }
+    if (added && state.view === 'wire') renderWire();
+  } catch { /* el vigilante no debe romper la vista */ } finally {
+    state.wireBusy = false;
+  }
+}
+
+function renderWire() {
+  const posts = wire.queue();
+  const pendientes = posts.filter((p) => !p.posted).length;
+
+  const card = (p) => {
+    const chars = p.text.length;
+    const mvp = p.mvp;
+    return `
+    <div class="card wire-post${p.posted ? ' done' : ''}">
+      <div class="card-head">
+        <h3>${p.kind === 'pre' ? '🔴 Arranque' : '✅ Cierre'} · ${esc(p.teams)}${p.gameNumber ? ` · Mapa ${p.gameNumber}` : ''}</h3>
+        <span class="muted-xs">${esc(p.league ?? '')} · ${esc(new Date(p.createdAt).toLocaleString('es'))}</span>
+      </div>
+      <div class="card-body">
+        <div class="tweet-card">
+          <div class="tweet-logos">
+            ${(p.logos ?? []).filter(Boolean).map((l) => `<img src="${esc(l)}" alt="">`).join('')}
+            ${mvp?.photo ? `<img class="tweet-mvp" src="${esc(mvp.photo)}" alt="">` : ''}
+          </div>
+          <pre class="tweet-text">${esc(p.text)}</pre>
+          <div class="tweet-meta">
+            <span class="${chars > 280 ? 'warn-txt' : 'muted-xs'}">${chars}/280</span>
+            ${p.posted ? '<span class="badge badge-ok">publicado</span>' : ''}
+          </div>
+        </div>
+
+        ${mvp ? `
+          <div class="mvp-box">
+            <div class="mvp-head">
+              ${mvp.photo ? `<img src="${esc(mvp.photo)}" alt="">` : ''}
+              <div>
+                <div><strong>${esc(mvp.name)}</strong> · ${esc(championName(mvp.champion))} · ${esc(mvp.team)}</div>
+                <div class="muted-xs">${esc(mvp.kda)} · ${(mvp.damageShare * 100).toFixed(0)}% del daño ·
+                  ${(mvp.killParticipation * 100).toFixed(0)}% de participación ·
+                  ${mvp.gold?.toLocaleString('es') ?? '—'} de oro</div>
+              </div>
+              <div class="mvp-rating">${mvp.rating.toFixed(1)}<span>/10</span></div>
+            </div>
+            <div class="muted-xs">${mvp.components.map((c) => `${esc(c.label)}: ${esc(c.value)}`).join(' · ')}</div>
+            <div class="note">La calificación es un número inventado y acá se dice: los pesos son
+              juicio propio, no están validados contra nada y no entran en ninguna probabilidad ni
+              en el registro. Es una etiqueta editorial, no una predicción.</div>
+          </div>` : ''}
+
+        <div class="wire-actions">
+          <a class="btn btn-sm" href="${esc(intentUrl(p.text))}" target="_blank" rel="noopener"
+             data-posted="${esc(p.id)}">Abrir en X</a>
+          <button class="btn btn-sm btn-outline" data-copy="${esc(p.id)}">Copiar texto</button>
+          ${(p.media ?? []).filter(Boolean).map((m, i) =>
+            `<a class="btn btn-sm btn-outline" href="${esc(m)}" target="_blank" rel="noopener">Imagen ${i + 1}</a>`).join('')}
+          <button class="btn btn-sm btn-outline" data-toggle="${esc(p.id)}">${p.posted ? 'Marcar sin publicar' : 'Marcar publicado'}</button>
+          <button class="btn btn-sm btn-outline" data-drop="${esc(p.id)}">Descartar</button>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  setContent(`
+    <div class="card">
+      <div class="card-head"><h3>Wire</h3>
+        <span class="muted-xs">función oculta · no está enlazada desde ninguna parte</span></div>
+      <div class="card-body">
+        <div class="live-grid">
+          <div class="stat"><div class="stat-k">Vigilancia</div>
+            <div class="stat-v ${state.wireOn ? 'ok-txt' : 'warn-txt'}">${state.wireOn ? 'encendida' : 'apagada'}</div>
+            <div class="muted-xs">revisa las 6 ligas cada 20 s</div></div>
+          <div class="stat"><div class="stat-k">En cola</div>
+            <div class="stat-v">${posts.length}</div>
+            <div class="muted-xs">${pendientes} sin publicar</div></div>
+          <div class="stat"><div class="stat-k">Última pasada</div>
+            <div class="stat-v small">${state.wireLast ? esc(new Date(state.wireLast.at).toLocaleTimeString('es')) : '—'}</div>
+            <div class="muted-xs">${state.wireLast ? `${state.wireLast.added} nuevas` : 'sin correr todavía'}</div></div>
+        </div>
+
+        <div class="note note-warn">
+          <strong>Esto arma los tweets, no los publica.</strong> Un sitio estático no puede postear
+          en X: la API pide OAuth con secretos de servidor, y cualquier cosa embarcada acá la lee
+          quien abra el código. Cada entrada queda lista con su texto y sus imágenes; el último paso
+          es tuyo. Para que sea automático de punta a punta hace falta un worker con tus
+          credenciales — está explicado en el README.
+        </div>
+
+        <div class="wire-actions" style="margin-top:12px">
+          <button class="btn btn-sm" id="wire-toggle">${state.wireOn ? 'Apagar vigilancia' : 'Encender vigilancia'}</button>
+          <button class="btn btn-sm btn-outline" id="wire-now">Revisar ahora</button>
+          <button class="btn btn-sm btn-outline" id="wire-clear">Vaciar cola</button>
+        </div>
+      </div>
+    </div>
+    ${posts.length ? posts.map(card).join('') : `
+      <div class="card"><div class="card-body">
+        <p class="muted">Todavía no hay nada en la cola. Se llena sola cuando arranca o termina un
+          mapa en cualquiera de las 6 ligas.</p>
+      </div></div>`}
+  `);
+
+  $('#wire-toggle')?.addEventListener('click', () => {
+    state.wireOn = !state.wireOn;
+    try { localStorage.setItem('cml:wire:on', state.wireOn ? '1' : '0'); } catch { /* modo privado */ }
+    renderWire();
+    if (state.wireOn) wireTick();
+  });
+  $('#wire-now')?.addEventListener('click', async () => {
+    await wireTick();
+    renderWire();
+  });
+  $('#wire-clear')?.addEventListener('click', () => {
+    if (confirm('¿Vaciar la cola de publicaciones?')) { wire.clearQueue(); renderWire(); }
+  });
+  document.querySelectorAll('[data-copy]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const p = wire.queue().find((x) => x.id === b.dataset.copy);
+      if (!p) return;
+      try { await navigator.clipboard.writeText(p.text); b.textContent = 'copiado'; }
+      catch { b.textContent = 'no se pudo copiar'; }
+      setTimeout(() => { b.textContent = 'Copiar texto'; }, 1600);
+    })
+  );
+  document.querySelectorAll('[data-toggle]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const p = wire.queue().find((x) => x.id === b.dataset.toggle);
+      wire.markPosted(b.dataset.toggle, !p?.posted);
+      renderWire();
+    })
+  );
+  document.querySelectorAll('[data-drop]').forEach((b) =>
+    b.addEventListener('click', () => { wire.removePost(b.dataset.drop); renderWire(); })
+  );
+  // Abrir el compositor de X marca la entrada: es lo más cerca de "publicado"
+  // que el sitio puede saber, y se puede corregir a mano.
+  document.querySelectorAll('[data-posted]').forEach((a) =>
+    a.addEventListener('click', () => {
+      wire.markPosted(a.dataset.posted, true);
+      setTimeout(renderWire, 400);
+    })
+  );
 }
 
 /* ------------------------------------------------------------------ *
