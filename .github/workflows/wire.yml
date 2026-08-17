@@ -42,6 +42,10 @@ jobs:
           WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
           WIRE_MEDIA: ${{ vars.WIRE_MEDIA }}
           WIRE_PAUSE_HOURS: ${{ vars.WIRE_PAUSE_HOURS }}
+          # Entrega gratuita: el tweet ya armado te llega y lo publicás de un toque.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           # Solo para pruebas: alcanzar partidos que ya terminaron.
           WIRE_BACKFILL: ${{ vars.WIRE_BACKFILL }}
           WIRE_MATCH: ${{ vars.WIRE_MATCH }}

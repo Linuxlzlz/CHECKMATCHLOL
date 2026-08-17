@@ -196,6 +196,83 @@ async function postTweet(text, mediaIds, creds) {
 }
 
 /* ------------------------------------------------------------------ *
+ * salidas gratuitas
+ * ------------------------------------------------------------------ *
+ *
+ * La API de X cobra por publicar. Publicar VOS, en cambio, no cuesta nada: lo
+ * que se cobra es el robot, no el mensaje. Y avisarte que hay algo listo es
+ * gratis en cualquier lado.
+ *
+ * Así que el bot puede entregarte el tweet ya armado por Telegram o Discord —los
+ * dos sin cuota— con el enlace que abre el compositor de X con todo puesto. Queda
+ * a un toque de publicarse, sin gastar un crédito.
+ *
+ * No es un rodeo a la cuota de X: es no usar la API para algo que no la necesita.
+ */
+
+const INTENT = (text) => `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
+
+async function sendTelegram(post, token, chatId) {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const body = {
+    chat_id: chatId,
+    text: `${post.text}\n\n▸ Publicar: ${INTENT(post.text)}`,
+    disable_web_page_preview: false,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`telegram ${r.status}: ${(await r.text()).slice(0, 160)}`);
+}
+
+async function sendDiscord(post, webhook) {
+  const r = await fetch(webhook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: `\`\`\`\n${post.text}\n\`\`\`\n[Publicar en X](${INTENT(post.text)})`,
+      embeds: (post.media ?? []).filter(Boolean).slice(0, 2).map((u) => ({ image: { url: u } })),
+    }),
+  });
+  if (!r.ok) throw new Error(`discord ${r.status}: ${(await r.text()).slice(0, 160)}`);
+}
+
+/**
+ * Entrega por los canales gratuitos lo que todavía no se entregó.
+ *
+ * Lleva su propia marca, separada de `posted`: que te haya llegado el aviso no
+ * significa que ya esté publicado en X.
+ */
+async function deliverFree(pending) {
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChat = process.env.TELEGRAM_CHAT_ID;
+  const discord = process.env.DISCORD_WEBHOOK;
+  if (!((tgToken && tgChat) || discord)) return 0;
+
+  const KEY = 'cml:wire:notified';
+  let sent;
+  try { sent = JSON.parse(localStorage.getItem(KEY) ?? '{}'); } catch { sent = {}; }
+
+  let n = 0;
+  for (const p of pending) {
+    if (sent[p.id]) continue;
+    try {
+      if (tgToken && tgChat) await sendTelegram(p, tgToken, tgChat);
+      if (discord) await sendDiscord(p, discord);
+      sent[p.id] = new Date().toISOString();
+      n++;
+      console.log(`avisado ${p.id}`);
+    } catch (e) {
+      console.warn(`  no se pudo avisar ${p.id}: ${e.message}`);
+    }
+  }
+  localStorage.setItem(KEY, JSON.stringify(sent));
+  return n;
+}
+
+/* ------------------------------------------------------------------ *
  * main
  * ------------------------------------------------------------------ */
 
@@ -411,6 +488,11 @@ async function main() {
 
   const pending = wire.queue().filter((p) => !p.posted).reverse(); // más viejas primero
   console.log(`Pendientes: ${pending.length}`);
+
+  // Los canales gratuitos van SIEMPRE, publique o no en X: son la red de
+  // seguridad cuando la cuota se agota, y no cuestan nada.
+  const avisados = await deliverFree(pending);
+  if (avisados) console.log(`Avisos enviados: ${avisados}`);
 
   if (!live) {
     for (const p of pending.slice(0, maxPerRun)) {

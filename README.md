@@ -471,6 +471,29 @@ Para estirar la cuota:
 Ojo también con `WIRE_VERIFY`: cada corrida sube una imagen de prueba y eso consume. Una vez que dio
 OK, no hace falta repetirla.
 
+### La salida que no cuesta nada
+
+Lo que la API de X cobra es **el robot**, no el mensaje: publicar vos, como usuario, es gratis y sin
+cuota. Y avisarte que hay algo listo es gratis en cualquier lado.
+
+Así que el bot puede entregarte el tweet ya armado por **Telegram** o **Discord**, con el enlace que
+abre el compositor de X con el texto puesto. Queda a un toque de publicarse, sin gastar un crédito y
+sin depender de que tengas el sitio abierto.
+
+| Secret | Cómo se consigue |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Hablale a [@BotFather](https://t.me/BotFather), `/newbot`, te da el token |
+| `TELEGRAM_CHAT_ID` | Escribile a tu bot y abrí `api.telegram.org/bot<TOKEN>/getUpdates`: el id sale en `chat.id` |
+| `DISCORD_WEBHOOK` | Canal → Editar → Integraciones → Webhooks → Nuevo webhook → Copiar URL |
+
+Alcanza con configurar uno de los dos. Los avisos se mandan **siempre**, publique o no en X, y llevan
+su propia marca: que te haya llegado el aviso no significa que ya esté publicado.
+
+Esto convierte el flujo en semiautomático de verdad: el análisis, el MVP y los hashtags salen solos,
+y lo único que ponés es el toque final. Para automatización completa sin costo, el mismo texto se
+puede mandar a plataformas cuyas APIs son gratuitas —Bluesky, Mastodon, el propio Discord— y dejar X
+en un toque.
+
 ### Los hashtags de equipo son una tabla a mano
 
 `TEAM_TAGS` en `engine/tweet.js`. Los hashtags oficiales cambian cada split y **ninguna API los
