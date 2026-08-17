@@ -25,6 +25,28 @@ export const EVIDENCE = {
    */
   ladoAzul: { p: 0.570, n: 414, low: 0.522, high: 0.617, solido: true },
 
+  /**
+   * El récord de cada equipo, en prueba PROSPECTIVA: para cada mapa se calcula
+   * solo con los anteriores, que es como se usaría en vivo. Es, después del
+   * lado, lo único que mejora la predicción de forma clara.
+   *
+   * El barrido de pesos tiene mínimo entre 3 y 4, y empeora a partir de 5 — que
+   * la curva tenga fondo es la señal de que el efecto es real y no un artefacto
+   * de dejarlo crecer. El peso del modelo es 2.2 y queda cerca del óptimo sin
+   * llegar a apostar por él.
+   */
+  record: {
+    base: { brier: 0.2383, acierto: 0.62, n: 215 },
+    conRecord: { brier: 0.2249, acierto: 0.66, peso: 2.2 },
+    optimo: { peso: 3.5, brier: 0.2236 },
+    porHistoria: {
+      3: { n: 308, brier: 0.2310, acierto: 0.62 },
+      6: { n: 215, brier: 0.2249, acierto: 0.66 },
+      10: { n: 102, brier: 0.2204, acierto: 0.67 },
+    },
+    minimoUtil: 6,
+  },
+
   /** Acierto de cada eje del índice, cara a cara. */
   ejes: {
     teamfight: { p: 0.50, n: 400, low: 0.45, high: 0.55 },
