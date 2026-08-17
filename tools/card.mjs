@@ -20,7 +20,7 @@ const W = 1200;
 // La de cierre entra en 16:9; la de arranque necesita más alto porque lleva el
 // cara a cara por eje más los planes de los dos equipos.
 const H = 675;
-const H_PRE = 780;
+const H_PRE = 830;
 
 const INK = '#080b12';
 const GLOW = '#16213a';
@@ -257,7 +257,38 @@ export async function preMatchCard(d) {
     ctx.fillText(`${d.favorite.team}  ${Math.round(d.favorite.p * 100)}%`, bx + wFav + 16, by + 48);
   }
 
-  rule(ctx, 70, 338, W - 140);
+  // --- estado de forma ---
+  // Récord del split y racha. Un 9-3 que viene de perder tres seguidas no es el
+  // mismo equipo que un 9-3 en alza, así que van los dos datos juntos.
+  if (d.form?.blue || d.form?.red) {
+    const forma = (x, f, code, color, alinearDerecha) => {
+      if (!f) return;
+      const txt = `${f.wins}-${f.losses}`;
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillStyle = GOLD_DARK;
+      ctx.font = 'bold 18px sans-serif';
+      ctx.fillStyle = color;
+      const wRec = ctx.measureText(txt).width;
+      const startX = alinearDerecha ? x - wRec - (f.last.length * 20) - 14 : x;
+      ctx.fillText(txt, startX, 340);
+      // La racha, del más viejo al más nuevo.
+      let cx2 = startX + wRec + 14;
+      for (const r of f.last) {
+        ctx.fillStyle = r === 'V' ? GREEN : RED;
+        ctx.beginPath();
+        ctx.arc(cx2 + 6, 335, 6, 0, Math.PI * 2);
+        ctx.fill();
+        cx2 += 20;
+      }
+    };
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = GOLD_DARK;
+    tracked(ctx, 'FORMA EN EL SPLIT', 70, 316, 2);
+    forma(70, d.form.blue, d.blue, ACCENT, false);
+    forma(W - 70, d.form.red, d.red, RED, true);
+  }
+
+  rule(ctx, 70, 364, W - 140);
 
   // --- cara a cara por eje ---
   // Barras divergentes desde el centro: de un vistazo se ve quién gana cada eje
@@ -267,18 +298,18 @@ export async function preMatchCard(d) {
   ctx.font = 'bold 13px sans-serif';
   ctx.fillStyle = GOLD_DARK;
   const wCC = trackedWidth(ctx, 'CARA A CARA POR EJE', 2);
-  tracked(ctx, 'CARA A CARA POR EJE', 70, 368, 2);
+  tracked(ctx, 'CARA A CARA POR EJE', 70, 394, 2);
   // El respaldo, al lado del título y no en una nota al pie que nadie lee.
   if (d.evidence?.lado) {
     ctx.font = '13px sans-serif';
     ctx.fillStyle = 'rgba(205,198,182,0.6)';
-    ctx.fillText(d.evidence.lado, 70 + wCC + 20, 368);
+    ctx.fillText(d.evidence.lado, 70 + wCC + 20, 394);
   }
 
   const cx = 640;          // centro de las barras
   const half = 235;        // alcance máximo a cada lado
   const MAXD = 6;          // puntos crudos que llenan media barra
-  let ry = 398;
+  let ry = 424;
   for (const c of d.compare ?? []) {
     ctx.font = '17px sans-serif';
     ctx.fillStyle = c.narratable ? CREAM : 'rgba(205,198,182,0.45)';

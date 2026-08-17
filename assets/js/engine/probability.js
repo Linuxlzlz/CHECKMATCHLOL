@@ -41,6 +41,27 @@ export const WEIGHTS = {
  * ganadores, el peso vuelve solo. La regla es "el peso lo fija la última
  * medición", no "el draft no sirve".
  */
+/**
+ * Peso del draft según la medición congelada, para quien no tenga corpus a mano
+ * — el bot, por ejemplo. Mantiene al sitio y al bot diciendo lo mismo: sin esto,
+ * la tarjeta podía afirmar que el índice no separa ganadores y a la vez usarlo
+ * con peso completo para calcular el número que mostraba.
+ */
+export function draftWeightFromEvidence() {
+  const tf = EVIDENCE.ejes?.teamfight;
+  if (tf && tf.low <= 0.5 && tf.high >= 0.5) {
+    return {
+      weight: 0,
+      measured: true,
+      reason:
+        `Medido sobre ${tf.n} mapas: el eje acierta ${Math.round(tf.p * 100)}% ` +
+        `(IC95 [${Math.round(tf.low * 100)}, ${Math.round(tf.high * 100)}], cruza el 50%). ` +
+        `Entra en cero.`,
+    };
+  }
+  return { weight: WEIGHTS.draft, measured: false, reason: null };
+}
+
 export function draftWeightFrom(validation) {
   if (!validation?.usable) {
     return { weight: WEIGHTS.draft, reason: 'Sin corpus indexado: se usa el peso por defecto, que nunca fue validado fuera de muestra.', measured: false };

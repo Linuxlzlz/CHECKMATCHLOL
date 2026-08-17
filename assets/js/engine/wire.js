@@ -23,16 +23,16 @@ import { scoreDraft } from './index-score.js';
 import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
-import { buildProbability } from './probability.js';
+import { buildProbability, draftWeightFromEvidence } from './probability.js';
+import {
+  preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
+  MVP_CRITERIA,
+} from './tweet.js';
 import { EVIDENCE } from '../data/evidence.js';
 
 const AXIS_ES_SHORT = {
   teamfight: 'teamfight', pick: 'pick', split: 'split', siege: 'asedio', scaling: 'escalado',
 };
-import {
-  preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
-  MVP_CRITERIA,
-} from './tweet.js';
 
 const KEY = 'cml:wire:v1';
 const MAX_QUEUE = 60;
@@ -99,6 +99,51 @@ function push(id, entry, regenerate = false) {
   }
   write(v);
   return true;
+}
+
+/**
+ * Estado de forma de un equipo en el split: récord y últimos resultados.
+ *
+ * Sale del propio calendario, no de los standings: así se obtienen las dos cosas
+ * de una, el acumulado y la RACHA, que es lo que uno mira de verdad. Un 9-3 que
+ * viene de perder tres seguidas no es el mismo equipo que un 9-3 en alza.
+ *
+ * Importa además por una razón que no es estética: el bot venía construyendo la
+ * probabilidad SIN el componente de calidad de equipos —el que más pesa— porque
+ * nunca le pasaba los récords. Esto lo alimenta.
+ */
+const formCache = new Map();
+async function teamForm(leagueId, teamIds) {
+  const key = `${leagueId}`;
+  if (!formCache.has(key)) {
+    const porEquipo = new Map();
+    try {
+      const sched = await getSchedule(leagueId);
+      const evs = (sched?.data?.schedule?.events ?? [])
+        .filter((e) => e.state === 'completed' && e.match?.teams?.length === 2)
+        .sort((a, b) => String(a.startTime ?? '').localeCompare(String(b.startTime ?? '')));
+      for (const e of evs) {
+        const [t1, t2] = e.match.teams;
+        const w1 = t1.result?.gameWins ?? 0;
+        const w2 = t2.result?.gameWins ?? 0;
+        if (w1 === w2) continue;              // sin ganador claro no suma
+        for (const [t, gano] of [[t1, w1 > w2], [t2, w2 > w1]]) {
+          if (!t?.id) continue;
+          if (!porEquipo.has(t.id)) porEquipo.set(t.id, { wins: 0, losses: 0, last: [] });
+          const r = porEquipo.get(t.id);
+          if (gano) r.wins++; else r.losses++;
+          r.last.push(gano ? 'V' : 'D');
+        }
+      }
+    } catch { /* sin calendario no hay forma, y el resto sigue */ }
+    formCache.set(key, porEquipo);
+  }
+  const m = formCache.get(key);
+  return teamIds.map((id) => {
+    const r = m.get(id);
+    if (!r) return null;
+    return { wins: r.wins, losses: r.losses, last: r.last.slice(-5) };
+  });
 }
 
 /** Mapea el evento a un lado con equipo, imagen y jugadores. */
@@ -246,13 +291,20 @@ export async function tick({
       const { edges, window: ventana } = concentrationAndWindow(sides.a, sides.b, axes);
 
       if (needPre) {
+        // La forma del split alimenta el componente de calidad de equipos, que es
+        // el que más pesa y que el bot venía dejando vacío.
+        const [formA, formB] = await teamForm(league.id, [sides.a.teamId, sides.b.teamId]);
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
         const prob = buildProbability({
-          recordA: rec?.a ?? null,
-          recordB: rec?.b ?? null,
+          recordA: rec?.a ?? formA ?? null,
+          recordB: rec?.b ?? formB ?? null,
           tfDelta: score.tfDelta,
           goldDiff: null,
           minute: null,
+          // Mismo criterio que el sitio: si la medición dice que el índice no
+          // separa ganadores, el draft entra en cero. Antes el bot lo pesaba
+          // 0.30 mientras la propia tarjeta decía que no tiene respaldo.
+          draftWeight: draftWeightFromEvidence(),
         });
         const t = preMatchTweet({ league, ev, game, blue: sides.a, red: sides.b, score, prob, edges });
         if (push(preId, {
@@ -276,6 +328,8 @@ export async function tick({
               side: prob.p >= 0.5 ? 'blue' : 'red',
               p: Math.max(prob.p, 1 - prob.p),
             },
+            // Estado de forma: récord del split y racha reciente.
+            form: { blue: formA, red: formB },
             // Cara a cara por eje: teamfight, pick, split, asedio, escalado.
             compare: axisCompare(score),
             // Qué tiene que pasar para que gane cada uno.
