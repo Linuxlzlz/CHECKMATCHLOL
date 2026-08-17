@@ -199,10 +199,11 @@ export async function preMatchCard(d) {
 
   ctx.font = 'bold 20px sans-serif';
   ctx.fillStyle = RED;
+  const wTag = trackedWidth(ctx, 'EN VIVO', 3);
   tracked(ctx, 'EN VIVO', 60, 92, 3);
   ctx.fillStyle = CREAM;
   ctx.font = '19px sans-serif';
-  ctx.fillText(`${d.league ?? ''}${d.gameNumber ? `  ·  Mapa ${d.gameNumber}` : ''}`, 175, 92);
+  ctx.fillText(`${d.league ?? ''}${d.gameNumber ? `  ·  Mapa ${d.gameNumber}` : ''}`, 60 + wTag + 26, 92);
 
   // Equipos con sus logos.
   await drawImageSafe(ctx, d.blueLogo, 70, 140, 120, 120);
@@ -239,10 +240,10 @@ export async function preMatchCard(d) {
   rule(ctx, 70, 455, W - 140);
   ctx.font = '22px sans-serif';
   ctx.fillStyle = GOLD_LITE;
-  if (d.draftLine) ctx.fillText(d.draftLine, 70, 505);
+  if (d.draftLine) ctx.fillText(String(d.draftLine).slice(0, 74), 70, 505);
   ctx.fillStyle = CREAM;
   ctx.font = '21px sans-serif';
-  if (d.keyLine) ctx.fillText(d.keyLine, 70, 545);
+  if (d.keyLine) ctx.fillText(String(d.keyLine).slice(0, 78), 70, 545);
 
   ctx.font = '16px sans-serif';
   ctx.fillStyle = GOLD_DARK;
@@ -262,14 +263,17 @@ export async function postMatchCard(d) {
   const ctx = canvas.getContext('2d');
   background(ctx);
 
+  // La etiqueta se mide antes de escribir lo que va al lado: con la posición
+  // fija, en el runner la serif es otra y los textos se montan.
   ctx.font = 'bold 20px sans-serif';
   ctx.fillStyle = GREEN;
+  const wTag = trackedWidth(ctx, 'RESULTADO', 3);
   tracked(ctx, 'RESULTADO', 60, 92, 3);
   ctx.fillStyle = CREAM;
   ctx.font = '19px sans-serif';
   ctx.fillText(
     `${d.league ?? ''}${d.gameNumber ? `  ·  Mapa ${d.gameNumber}` : ''}${d.minute ? `  ·  ${Math.round(d.minute)} min` : ''}`,
-    205, 92
+    60 + wTag + 26, 92
   );
 
   // Ganador.
@@ -283,9 +287,10 @@ export async function postMatchCard(d) {
 
   // --- MVP ---
   const mvp = d.mvp;
+  let barsEnd = 0;
   if (mvp) {
     const px = 90;
-    const py = 310;
+    const py = 296;
     await drawImageSafe(ctx, mvp.photo, px, py, 170, 170, { circle: true });
 
     ctx.font = 'bold 17px sans-serif';
@@ -318,17 +323,23 @@ export async function postMatchCard(d) {
     // Las cinco barras: en qué se destacó.
     const sx = tx;
     const sw = 380;
-    let sy = py + 128;
+    let sy = py + 124;
     for (const s of mvp.bars ?? []) {
       statBar(ctx, sx, sy, sw, s.label, s.value, s.frac, s.color ?? GOLD);
-      sy += 44;
+      sy += 40;
     }
+    barsEnd = sy;   // el bloque crece con la cantidad de barras
   }
 
+  // La clave va DEBAJO de las barras, no a una altura fija: con cinco barras la
+  // línea caía justo encima de la última.
   if (d.keyFact) {
-    ctx.font = '20px sans-serif';
-    ctx.fillStyle = CREAM;
-    ctx.fillText(d.keyFact.slice(0, 96), 68, H - 62);
+    const y = Math.max(barsEnd + 24, H - 52);
+    if (y < H - 26) {
+      ctx.font = '19px sans-serif';
+      ctx.fillStyle = CREAM;
+      ctx.fillText(d.keyFact.slice(0, 84), 68, y);
+    }
   }
 
   ctx.font = '16px sans-serif';
