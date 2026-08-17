@@ -66,9 +66,23 @@ export function clearQueue() {
   write({ posts: {}, seen: {} });
 }
 
-function push(id, entry) {
+/**
+ * Encola una publicación.
+ *
+ * Idempotente por diseño: una vez por mapa y momento, para que el poll no
+ * duplique nada. El costo de eso es que un cambio de formato NO llega a lo ya
+ * encolado — la entrada queda congelada con el diseño del día que se creó. Por
+ * eso existe `regenerate`, que la reescribe conservando si ya se publicó.
+ */
+function push(id, entry, regenerate = false) {
   const v = read();
-  if (v.posts[id]) return false;         // idempotente: una vez por mapa y momento
+  if (v.posts[id] && !regenerate) return false;
+  if (v.posts[id] && regenerate) {
+    const antes = v.posts[id];
+    v.posts[id] = { ...antes, ...entry, id, posted: antes.posted, postedAt: antes.postedAt };
+    write(v);
+    return true;
+  }
   v.posts[id] = { id, createdAt: new Date().toISOString(), posted: false, ...entry };
   const ids = Object.keys(v.posts);
   if (ids.length > MAX_QUEUE) {
@@ -153,6 +167,7 @@ async function resolveMatch(rawId) {
  */
 export async function tick({
   leagues = LEAGUES, recordFor = null, backfillHours = 0, matchIds = [], onlyKind = null,
+  regenerate = false,
 } = {}) {
   let added = 0;
   const wanted = new Set(leagues.map((l) => l.id));
@@ -205,8 +220,8 @@ export async function tick({
       const preId = `${game.id}:pre`;
       const postId = `${game.id}:post`;
       const already = read().posts;
-      const needPre = !already[preId] && onlyKind !== 'post';
-      const needPost = game.state === 'completed' && !already[postId] && onlyKind !== 'pre';
+      const needPre = (!already[preId] || regenerate) && onlyKind !== 'post';
+      const needPost = game.state === 'completed' && (!already[postId] || regenerate) && onlyKind !== 'pre';
       if (!needPre && !needPost) continue;
 
       let win;
@@ -252,7 +267,7 @@ export async function tick({
             redProfile: compProfile(score.sides[1], axes, 'b'),
           },
           ...t,
-        })) added++;
+        }, regenerate)) added++;
       }
 
       // --- mapa terminado: tweet de cierre con MVP ---
@@ -318,7 +333,7 @@ export async function tick({
             } : null,
           },
           ...t,
-        })) added++;
+        }, regenerate)) added++;
       }
     }
   }

@@ -334,10 +334,15 @@ async function deliverFree(pending) {
   // manda de a poco y con pausa: no hay apuro, el partido ya terminó.
   const max = num(process.env.WIRE_MAX_NOTIFY, 8);
   const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Volver a mandar algo ya avisado. Se usa al cambiar el diseño de la tarjeta:
+  // sin esto, lo viejo queda entregado con el formato de ayer y no hay forma de
+  // verlo con el nuevo salvo borrar el estado a mano.
+  const renotify = String(process.env.WIRE_RENOTIFY ?? '').toLowerCase() === 'true';
+  if (renotify) console.log('Reenviando también lo ya avisado.');
 
   let n = 0;
   for (const p of pending) {
-    if (sent[p.id]) continue;
+    if (sent[p.id] && !renotify) continue;
     if (n >= max) {
       console.log(`Quedan ${pending.filter((x) => !sent[x.id]).length - n} avisos para la próxima corrida (tope ${max}).`);
       break;
@@ -577,7 +582,12 @@ async function main() {
   if (backfillHours) console.log(`Backfill: ${backfillHours} h hacia atrás`);
   if (onlyKind) console.log(`Solo tweets de tipo: ${onlyKind}`);
 
-  const added = await wire.tick({ leagues, recordFor: null, backfillHours, matchIds, onlyKind });
+  // Rehacer lo ya encolado con el formato actual. La cola es idempotente a
+  // propósito, así que sin esto un cambio de diseño no alcanza a lo viejo.
+  const regenerate = String(process.env.WIRE_REGENERATE ?? '').toLowerCase() === 'true';
+  if (regenerate) console.log('Regenerando entradas ya encoladas con el formato actual.');
+
+  const added = await wire.tick({ leagues, recordFor: null, backfillHours, matchIds, onlyKind, regenerate });
   console.log(`Nuevas publicaciones en cola: ${added}`);
   if (!added && matchIds.length) {
     console.warn(
