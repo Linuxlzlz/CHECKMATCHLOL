@@ -407,8 +407,45 @@ cual. El wire deja cada tweet listo con su texto y las URLs de sus imágenes, y 
 click en "Abrir en X", que abre el compositor con el texto ya puesto.
 
 Para que sea automático de punta a punta hace falta un proceso con credenciales, fuera del
-navegador. La forma más barata es un workflow de GitHub Actions con cron: los secretos van en
-*Settings → Secrets*, nunca en el repo. Ese pedazo no está construido — es la pieza que queda.
+navegador: `.github/workflows/wire.yml` + `tools/wire-bot.mjs`, que corre cada 10 minutos en GitHub
+Actions y **reutiliza el mismo motor** — importa `engine/wire.js` tal cual, con un `localStorage` de
+mentira apoyado en un archivo, para que no existan dos versiones del análisis que se desincronicen.
+
+### Secrets y variables
+
+En *Settings → Secrets and variables → Actions*. Los cuatro **secrets** salen del portal de
+desarrolladores de X, en *Keys and tokens* de tu app:
+
+| Secret | De dónde sale |
+|---|---|
+| `X_API_KEY` | Consumer Keys → API Key |
+| `X_API_SECRET` | Consumer Keys → API Key Secret |
+| `X_ACCESS_TOKEN` | Authentication Tokens → Access Token |
+| `X_ACCESS_TOKEN_SECRET` | Authentication Tokens → Access Token Secret |
+
+**La trampa que hace perder más tiempo:** la app tiene que estar en *Read and Write*, y el Access
+Token hay que **regenerarlo después** de cambiar ese permiso. Un token generado antes queda de solo
+lectura para siempre y falla con 403 sin explicar por qué.
+
+Las **variables** (no son secretos, se ven en claro) controlan el comportamiento:
+
+| Variable | Default | Para qué |
+|---|---|---|
+| `WIRE_VERIFY` | — | En `true` solo valida las credenciales contra `users/me` y termina. **Empezá por acá.** |
+| `WIRE_LIVE` | `false` | Mientras no sea `true`, imprime lo que publicaría y no publica. |
+| `WIRE_LEAGUES` | todas | Lista separada por comas: `LCK,LEC`. Es el freno principal. |
+| `WIRE_MAX_PER_RUN` | `4` | Tope de publicaciones por corrida. |
+| `WIRE_MEDIA` | `true` | Si adjunta logos y foto del MVP. |
+
+Se recomienda este orden: `WIRE_VERIFY=true` una corrida → `WIRE_VERIFY=false` y mirar dos o tres
+simulacros en los logs → recién ahí `WIRE_LIVE=true`.
+
+### El límite de la API es el que define el alcance
+
+El tier gratuito de X permite del orden de **17 publicaciones por día**. Con 6 ligas y dos tweets
+por mapa, un día cargado de LPL solo ya lo supera. Las opciones son acotar con `WIRE_LEAGUES` a una
+o dos ligas, o pagar un tier superior. Conviene decidirlo antes de encenderlo, porque el bot no sabe
+cuánto le queda de cuota: solo va a ver errores 429 y dejar las publicaciones sin marcar.
 
 ### Los hashtags de equipo son una tabla a mano
 

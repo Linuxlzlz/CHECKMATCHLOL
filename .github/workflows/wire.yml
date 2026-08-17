@@ -1,0 +1,56 @@
+# Publica los tweets de arranque y cierre de mapa.
+#
+# Arranca en SIMULACRO: sin la variable WIRE_LIVE en "true" solo imprime lo que
+# habría publicado. Revisá un par de corridas antes de encenderlo.
+name: wire
+
+on:
+  schedule:
+    # Cada 10 minutos. Los mapas duran ~32 min de media, así que esta frecuencia
+    # alcanza para agarrar el arranque y el cierre de cada uno.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:        # para correrlo a mano desde la pestaña Actions
+
+concurrency:
+  # Dos corridas a la vez pelearían por el archivo de estado y podrían publicar
+  # dos veces lo mismo.
+  group: wire
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # solo para guardar el estado de la cola
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'    # trae fetch global; el bot no usa dependencias
+
+      - name: Generar y publicar
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          WIRE_LIVE: ${{ vars.WIRE_LIVE }}
+          WIRE_VERIFY: ${{ vars.WIRE_VERIFY }}
+          WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
+          WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
+          WIRE_MEDIA: ${{ vars.WIRE_MEDIA }}
+        run: node tools/wire-bot.mjs
+
+      - name: Guardar el estado de la cola
+        run: |
+          if [ -n "$(git status --porcelain tools/wire-state.json)" ]; then
+            git config user.name  "checkmatch-wire"
+            git config user.email "wire@users.noreply.github.com"
+            git add tools/wire-state.json
+            git commit -m "wire: estado de la cola [skip ci]"
+            git push
+          else
+            echo "sin cambios en el estado"
+          fi
