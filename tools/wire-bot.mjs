@@ -148,6 +148,37 @@ async function postTweet(text, mediaIds, creds) {
 
 const num = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def);
 
+/**
+ * Resuelve WIRE_LEAGUES contra las ligas conocidas.
+ *
+ * Acepta vacío y también "todas" / "all" / "*", porque la documentación decía
+ * 'Default: todas' y eso se lee como un valor a escribir. Una variable de
+ * configuración que por un malentendido deja al bot mirando NADA, y encima en
+ * silencio, es peor que una que falla: acá se resuelve o se grita.
+ */
+function resolveLeagues(raw, LEAGUES) {
+  const wanted = String(raw ?? '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+
+  const all = ['todas', 'todos', 'all', '*'];
+  if (!wanted.length || wanted.some((w) => all.includes(w.toLowerCase()))) return LEAGUES;
+
+  const known = new Map(LEAGUES.map((l) => [l.key.toUpperCase(), l]));
+  const hits = wanted.map((w) => known.get(w.toUpperCase())).filter(Boolean);
+  const misses = wanted.filter((w) => !known.has(w.toUpperCase()));
+
+  if (misses.length) {
+    console.warn(`WIRE_LEAGUES: no reconozco ${misses.join(', ')}. Válidas: ${[...known.keys()].join(', ')}`);
+  }
+  if (!hits.length) {
+    throw new Error(
+      `WIRE_LEAGUES="${raw}" no coincide con ninguna liga, así que no habría nada que vigilar. ` +
+      `Usá una lista de ${[...known.keys()].join(', ')}, o borrá la variable para vigilarlas todas.`
+    );
+  }
+  return hits;
+}
+
 function readCreds() {
   const creds = {
     key: process.env.X_API_KEY,
@@ -181,9 +212,7 @@ async function main() {
   const wire = await import('../assets/js/engine/wire.js');
   const { LEAGUES } = await import('../assets/js/api.js');
 
-  const only = (process.env.WIRE_LEAGUES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const leagues = only.length ? LEAGUES.filter((l) => only.includes(l.key)) : LEAGUES;
-
+  const leagues = resolveLeagues(process.env.WIRE_LEAGUES, LEAGUES);
   console.log(`Vigilando: ${leagues.map((l) => l.key).join(', ')}`);
   const added = await wire.tick({ leagues });
   console.log(`Nuevas publicaciones en cola: ${added}`);

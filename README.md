@@ -433,7 +433,7 @@ Las **variables** (no son secretos, se ven en claro) controlan el comportamiento
 |---|---|---|
 | `WIRE_VERIFY` | — | En `true` solo valida las credenciales contra `users/me` y termina. **Empezá por acá.** |
 | `WIRE_LIVE` | `false` | Mientras no sea `true`, imprime lo que publicaría y no publica. |
-| `WIRE_LEAGUES` | todas | Lista separada por comas: `LCK,LEC`. Es el freno principal. |
+| `WIRE_LEAGUES` | *(vacío = todas)* | Lista separada por comas: `LCK,LEC`. Es el freno principal. También acepta `todas`. |
 | `WIRE_MAX_PER_RUN` | `4` | Tope de publicaciones por corrida. |
 | `WIRE_MEDIA` | `true` | Si adjunta logos y foto del MVP. |
 
