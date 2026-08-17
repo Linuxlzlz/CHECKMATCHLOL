@@ -173,7 +173,8 @@ Qué significa y qué no:
 - **Hay un control de sanidad.** El winrate del lado azul da 57% [52, 61], que es lo esperable en
   LoL profesional. Eso no valida el índice: valida que el ganador inferido por mapa no está sesgado
   hacia un lado. Si ese número se fuera de rango, toda la validación quedaría en duda y el panel lo
-  marca como bloqueante.
+  marca como bloqueante. (Ese 57% sirve como control de sanidad y **no** como ventaja de lado: más
+  abajo está por qué el número global engaña y cuál es la medición limpia.)
 
 ### Qué predice de verdad
 
@@ -183,7 +184,9 @@ El corte no es aleatorio a propósito: un corte al azar deja partidas del mismo 
 y filtra información del futuro, y el uso real es predecir mañana con lo de hasta hoy.
 
 La línea base tampoco es 50%: es **predecir siempre al lado azul**, que es una vara mucho más
-honesta y más difícil de superar.
+honesta y más difícil de superar. Vale como vara aunque el efecto de lado sea espurio —de hecho vale
+*por eso*: como se explica más abajo, "el azul" en este corpus es en buena parte un atajo para "el
+equipo que viene ganando", así que superarla exige algo más que redescubrir al favorito.
 
 Sobre 287 mapas de entrenamiento y **124 de evaluación que ningún modelo vio**:
 
@@ -208,19 +211,46 @@ Tres respuestas, y ninguna es la que uno querría:
   base son las de campeón. No es que los campeones no importen: es que con 421 mapas el winrate por
   campeón es mayormente ruido, y meterlo al modelo mete el ruido.
 
-### La ventaja de lado, que el modelo estaba tirando a la basura
+### La ventaja de lado, que resultó no existir
 
-El predictor más fuerte de todo el corpus no es ningún eje del draft: es **de qué lado juega cada
-equipo**. El azul gana **57%** (n=414, IC95 [52, 62]), y es el único cuyo intervalo no toca el 50% —
-cosa que ninguno de los cinco ejes del índice logra.
+Durante un tiempo este README dijo acá que el predictor más fuerte del corpus no era ningún eje del
+draft sino **de qué lado juega cada equipo**: el azul ganaba 57% (n=414, IC95 [52, 62]), el único
+intervalo que no tocaba el 50%. El modelo lo incorporó como componente propio y arrancaba los mapas
+en 57-43.
 
-El modelo arrancaba en 50-50 e ignoraba el lado por completo. Eso era descartar gratis la única
-señal sólida disponible antes del primer minuto. Ahora entra como componente propio, tomado del
-corpus indexado si hay, o de la medición congelada en `data/evidence.js` si no.
+Estaba mal, y lo que lo delató fue un número que no cerraba: un mapa 2 que se quedaba clavado en 57%
+para el favorito pasara lo que pasara. Partiendo el corpus por número de mapa aparece por qué:
 
-Con dos equipos idénticos y draft parejo, el número pasó de 50% a **57% para el azul**.
+| | winrate del azul | |
+|---|---|---|
+| Mapa 1 | 89/175 = **51%** [44, 58] | ~ |
+| Mapa 2 | 112/170 = **66%** [58, 73] | *** |
+| Mapa 3 | 35/69 = **51%** [39, 62] | ~ |
 
-Ese hallazgo cambió el modelo: **el peso del componente de draft ahora lo fija la medición.** Si la
+Todo el efecto vive en el mapa 2, que es exactamente el único mapa donde el lado **no se sortea**: el
+azul del mapa 2 es el ganador del mapa 1 en **149/170 = 88%** de las series. "Gana el azul" ahí es
+casi la misma frase que "gana el que viene ganando", y ese suele ser el mejor equipo. No era una
+ventaja de lado: era fuerza de equipo entrando disfrazada — y contada por tercera vez, porque el
+modelo ya la cuenta en el récord y en el corpus.
+
+El reemplazo natural sería meter "viene de ganar el mapa anterior" como componente propio: medido
+da 136/239 = 57% [51, 63], parece señal. No lo es. Partido por quién era el equipo más fuerte:
+
+| El que ganó el mapa anterior era… | …gana el siguiente | |
+|---|---|---|
+| el **más débil** | 20/70 = **29%** [19, 40] | *** |
+| parejos | 9/28 = 32% [18, 51] | ~ |
+| el **más fuerte** | 94/122 = **77%** [69, 84] | *** |
+
+Cuando gana el débil, el siguiente mapa lo gana el rival el 71% de las veces. No hay inercia de
+serie: hay regresión a la media. El 57% era fuerza de equipo al 100%.
+
+Así que el componente de lado quedó en su **única medición limpia, la del mapa 1: 51%**, con el
+intervalo cruzando el 50%. Aporta menos de un punto, que es lo que corresponde. Queda anotado en
+`data/evidence.js` junto con el resultado negativo de la inercia, para que a nadie —incluido yo—
+se le ocurra volver a agregarlo.
+
+Otro hallazgo, ese sí sostenido, cambió el modelo: **el peso del componente de draft ahora lo fija la medición.** Si la
 banda grande cruza el 50% con n≥60, entra en cero, y el desglose de la Lectura lo dice con el número
 que lo justifica. No está clavado: vuelve solo si un corpus futuro muestra que el índice separa.
 Además entró un componente nuevo, la fuerza de equipo medida por mapa en el corpus, a mitad de peso

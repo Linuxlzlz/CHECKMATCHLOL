@@ -1781,7 +1781,10 @@ function cardDiscovery(disc) {
        <strong>${esc((ev.testFrom ?? '').slice(0, 10))} a ${esc((ev.testTo ?? '').slice(0, 10))}</strong>.
        Un corte aleatorio dejaría partidas del mismo día de los dos lados y filtraría información del
        futuro. La línea base no es 50%: es predecir siempre al lado azul, que gana
-       ${(ev.sideRate * 100).toFixed(0)}% en el corpus.
+       ${(ev.sideRate * 100).toFixed(0)}% en el corpus. Ese ${(ev.sideRate * 100).toFixed(0)}% no es
+       ventaja de lado —casi todo viene del mapa 2, donde el azul es el ganador del mapa 1 el 88% de
+       las veces—, pero por eso mismo es una vara dura: superarla exige aportar algo por encima de
+       ya saber quién es el favorito de la serie.
      </div>
      <div class="table-scroll">
        <table class="detail-table nar-table">

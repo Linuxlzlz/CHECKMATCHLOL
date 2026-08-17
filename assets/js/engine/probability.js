@@ -112,24 +112,39 @@ export function buildProbability({
 
   // 0. Ventaja de lado.
   //
-  // El modelo arrancaba en 50-50 e ignoraba el lado, cuando el lado resultó ser
-  // el predictor MÁS FUERTE de todo el corpus: el azul gana 57% (n=414, IC95
-  // [52, 62]), y le gana a los cinco ejes del índice juntos. Empezar en 50-50
-  // era descartar gratis la única señal sólida que hay antes del primer minuto.
+  // Acá había un 57% que este modelo trataba como su señal más fuerte, y era un
+  // artefacto. El 57% global se concentra entero en el mapa 2 (66%), que es el
+  // único mapa donde el lado no se sortea: ahí el azul es el ganador del mapa 1
+  // en el 88% de las series. Estaba midiendo "gana el que venía ganando", o sea
+  // fuerza de equipo, que el modelo ya cuenta dos veces más abajo. Contarla una
+  // tercera vez disfrazada de lado es lo que inflaba al favorito en los mapas 2.
+  //
+  // Medido donde el lado viene dado de antes —el mapa 1— la ventaja es 51%, con
+  // el intervalo cruzando el 50%. Se deja porque es el número honesto, no porque
+  // mueva algo: aporta menos de un punto.
+  // Y como el intervalo de esa medición limpia cruza el 50% ([44, 58]), el
+  // componente entra en CERO. Un eje solo mueve la probabilidad si su muestra
+  // lo sostiene; con este n no lo sostiene. Se sigue mostrando, con su número,
+  // para que se vea que se miró y qué dio — igual que el eje de draft.
   const sr = sideRate ?? EVIDENCE.ladoAzul.p;
+  const sideSolid = sideRate ? null : EVIDENCE.ladoAzul.solido;
   if (sr && sr !== 0.5) {
-    const contrib = logit(sr);
+    const contrib = sideSolid === false ? 0 : logit(sr);
     x += contrib;
     components.push({
       id: 'side',
       label: 'Ventaja de lado azul',
       detail: sideRate
         ? `${(sr * 100).toFixed(0)}% medido en el corpus indexado`
-        : `${(sr * 100).toFixed(0)}% sobre ${EVIDENCE.ladoAzul.n} mapas (medido el ${EVIDENCE.medidoEl})`,
+        : `${(sr * 100).toFixed(1)}% [${(EVIDENCE.ladoAzul.low * 100).toFixed(0)}, ` +
+          `${(EVIDENCE.ladoAzul.high * 100).toFixed(0)}] sobre ${EVIDENCE.ladoAzul.n} primeros mapas` +
+          (sideSolid === false ? ' · peso 0: el intervalo cruza el 50%' : ''),
       contrib,
+      excluded: sideSolid === false,
       note:
-        'El predictor más sólido que apareció: su intervalo no toca el 50%, cosa que ' +
-        'ninguno de los cinco ejes del índice logra.',
+        'Medido solo en primeros mapas, que es donde el lado no lo decide el resultado anterior. ' +
+        'El 57% que se leía antes mezclaba el sorteo del mapa 2, donde el azul es el ganador del ' +
+        'mapa 1 el 88% de las veces. Sin ese confusor el lado no separa, y lo que no separa no pesa.',
     });
   }
 
@@ -144,35 +159,47 @@ export function buildProbability({
     // Encoge hacia cero con muestras chicas: 4 partidas no son una temporada.
     const shrink = n / (n + 8);
 
-    // Freno por poca historia, medido y no supuesto. En una prueba prospectiva
-    // sobre el corpus —el récord de cada equipo calculado SOLO con lo anterior,
-    // como se usaría en vivo— el componente rinde así:
+    // Acá hubo un freno por poca historia y lo saqué, porque estaba mal medido.
     //
-    //   historia mínima 3 partidas   n=308   Brier 0.2310   62% de acierto
-    //   historia mínima 6 partidas   n=215   Brier 0.2249   66%
-    //   historia mínima 10 partidas  n=102   Brier 0.2204   67%
+    // El récord que llega de los standings se cuenta en SERIES: un "2-3" son 5
+    // series, o sea ~11 mapas. El freno comparaba ese número contra un umbral
+    // justificado con mediciones hechas por MAPA. Unidades distintas, y el
+    // resultado era amortiguar justo la banda donde el récord mejor funciona.
     //
-    // Con tres partidas queda igual que predecir solo por el lado. O sea que un
-    // 2-1 de principio de split no es información: es ruido con forma de récord.
-    const MIN_HISTORIA = 6;
-    const flojo = Math.min(nA, nB) < MIN_HISTORIA;
-    const castigo = flojo ? Math.min(nA, nB) / MIN_HISTORIA : 1;
+    // Medido de nuevo en la unidad correcta —récord por serie, calculado solo
+    // con lo anterior, como se usaría en vivo, sobre 142 series del corpus—
+    // contra predecir 50-50:
+    //
+    //   historia 1-2 series   n=61   Brier 0.2360 vs 0.2500   gana 0.014
+    //   historia 3-5 series   n=62   Brier 0.2179 vs 0.2500   gana 0.032
+    //   historia 6+ series    n=19   Brier 0.2171 vs 0.2500   gana 0.033
+    //
+    // Aporta en los tres tramos, incluso con dos series. Y el barrido de pesos
+    // tiene fondo en 3.4 (0.2223) tanto en el conjunto entero como en el tramo
+    // de historia baja: el peso 2.2 del modelo está del lado conservador, no
+    // pasado. No hay nada que frenar.
+    //
+    // Lo que sí hace falta con muestras chicas ya está: `shrink` encoge por
+    // total de series, así que un 1-0 contra un 0-1 entra a un quinto de peso
+    // sin necesidad de un umbral inventado.
+    const mn = Math.min(nA, nB);
 
-    const contrib = WEIGHTS.teamQuality * (wa - wb) * shrink * castigo;
+    const contrib = WEIGHTS.teamQuality * (wa - wb) * shrink;
     x += contrib;
     components.push({
       id: 'quality',
       label: 'Calidad de equipos (récord)',
       detail:
-        `${(wa * 100).toFixed(0)}% contra ${(wb * 100).toFixed(0)}% · ${nA} y ${nB} partidas · ` +
-        `encogido ×${shrink.toFixed(2)}` +
-        (flojo ? ` · recortado ×${castigo.toFixed(2)} por poca historia` : ''),
+        `${(wa * 100).toFixed(0)}% contra ${(wb * 100).toFixed(0)}% · ${nA} y ${nB} series · ` +
+        `encogido ×${shrink.toFixed(2)}`,
       contrib,
-      note: flojo
-        ? `Uno de los dos tiene menos de ${MIN_HISTORIA} partidas. Medido sobre el corpus, con esa ` +
-          'historia el récord no supera a predecir solo por el lado, así que aporta a medias.'
-        : 'Medido: con 6+ partidas por equipo lleva el acierto de 62% a 66% y el Brier de 0.2383 ' +
-          'a 0.2249, en prueba prospectiva sobre 215 mapas.',
+      note: mn <= 2
+        ? 'Historia corta: el encogido por muestra ya lo baja a una fracción del peso. Aun así ' +
+          'aporta — medido sobre 61 series con esa misma historia, gana 0.014 de Brier sobre ' +
+          'predecir 50-50.'
+        : 'Tramo donde el récord más rinde: con 3+ series por equipo gana 0.032 de Brier sobre ' +
+          'predecir 50-50, en prueba prospectiva sobre el corpus. El peso usado (2.2) queda por ' +
+          'debajo del óptimo medido (3.4) a propósito.',
     });
   } else {
     components.push({

@@ -346,7 +346,8 @@ export async function tick({
                 Object.entries(EVIDENCE.ejes)
                   .map(([k, v]) => `${AXIS_ES_SHORT[k] ?? k} ${Math.round(v.p * 100)}%`)
                   .join(' · '),
-              lado: `Ninguno supera al lado azul, que gana ${Math.round(EVIDENCE.ladoAzul.p * 100)}%.`,
+              lado: 'Ninguno separa por encima del azar. El lado tampoco: medido en primeros mapas ' +
+                `da ${(EVIDENCE.ladoAzul.p * 100).toFixed(0)}%.`,
               escalado: `Escalado acierta ${Math.round(EVIDENCE.escalado.largas * 100)}% en partidas largas ` +
                 `y ${Math.round(EVIDENCE.escalado.cortas * 100)}% en cortas: leelo como lectura, no como pronóstico.`,
             },

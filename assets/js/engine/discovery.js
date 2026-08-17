@@ -304,9 +304,14 @@ export const championFighting = (maps) =>
  * Cada modelo es una función que, dado un mapa, devuelve la probabilidad de que
  * gane el lado azul. Se entrenan con `train` y se evalúan con `test`.
  *
- * La línea base no es 50%: es el lado azul, que en profesional gana ~57%. Un
+ * La línea base no es 50%: es el lado azul, que en este corpus gana ~57%. Un
  * modelo que no le gana a "apostar siempre al azul" no aporta nada, y esa es una
  * vara mucho más honesta que el 50% que suele usarse.
+ *
+ * Ojo con leer ese 57% como ventaja de lado: no lo es (ver `data/evidence.js`).
+ * Casi todo sale del mapa 2, donde el azul es el ganador del mapa 1 el 88% de
+ * las veces. Como vara sirve igual, o más: superarla exige aportar algo por
+ * encima de "ya sé quién es el favorito de la serie".
  */
 export function buildModels(train) {
   const { champions, teams } = championStrength(train);
