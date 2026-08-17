@@ -25,9 +25,55 @@ const sigmoid = (x) => 1 / (1 + Math.exp(-x));
 export const WEIGHTS = {
   teamQuality: 3.5,   // sobre (winrate_a - winrate_b) YA SUAVIZADO, ver PRIOR
   draft: 0.30,        // por sd de Δ teamfight, solo si |Δ| > 0.5
-  goldPerK: 0.55,     // por cada 1000 de oro de diferencia, escalado por minuto
   corpusTeam: 2.2,    // sobre la diferencia de winrate medida en el corpus
 };
+
+/**
+ * El estado de partida, medido en vez de supuesto.
+ *
+ * Acá había una fórmula inventada: 0.55 por cada 1000 de oro, multiplicada por
+ * una rampa que subía de 0 a 1 entre los minutos 8 y 25. La intuición detrás
+ * era "el mismo oro pesa más tarde". Se midió, y es al revés.
+ *
+ * Se bajaron los frames de 320 partidas del corpus a los minutos 10, 15, 20,
+ * 25, 30 y 35 (1551 observaciones) y se ajustó el coeficiente del oro en cada
+ * minuto, con el Elo dentro para no atribuirle al oro la fuerza del equipo:
+ *
+ *   minuto   coef. medido   coef. que usaba el modelo   oro total medio
+ *     10        0.88             0.06                      32 400
+ *     15        0.62             0.23                      50 900
+ *     20        0.50             0.39                      71 100
+ *     25        0.46             0.55                      90 700
+ *     30        0.46             0.55                     110 100
+ *     35        0.31             0.55                     128 100
+ *
+ * El coeficiente BAJA porque el oro total sube: 2000 de ventaja sobre 32 000 es
+ * una diferencia enorme, y sobre 128 000 es ruido. La rampa vieja tenía el
+ * signo cambiado.
+ *
+ * Lo que corresponde entonces no es el oro absoluto sino la PROPORCIÓN. Con esa
+ * parametrización el coeficiente pasa a ser casi el mismo en toda la partida
+ * —su variación entre minutos cae de 0.33 a 0.137— y queda un solo número en
+ * vez de una rampa inventada.
+ *
+ * Fuera de muestra sobre 466 observaciones que el ajuste no vio:
+ *
+ *   fórmula vieja   Brier 0.1431
+ *   proporción      Brier 0.1312
+ */
+export const GOLD = {
+  base: 15,      // C al minuto 0
+  porMinuto: 1.1,
+  tope: 50,      // C satura acá, cerca del minuto 32
+  // Para estimar el oro total cuando el feed solo da la diferencia. Sale de los
+  // promedios medidos arriba: ~3900 por minuto a partir de un piso negativo.
+  totalPorMinuto: 3900,
+  totalBase: -7000,
+};
+
+/** Cuánto pesa un punto de proporción de oro en el minuto dado. */
+export const goldCoef = (minute) =>
+  Math.min(GOLD.tope, GOLD.base + GOLD.porMinuto * minute);
 
 /**
  * Cómo se lee un récord corto sin que mienta.
@@ -117,7 +163,19 @@ export function draftWeightFrom(validation) {
  * lineal y crudo: dejarlo llegar a 0% o 100% sería fingir una precisión que no
  * tiene. Se acota el aporte del estado y el total resultante.
  */
-export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
+/**
+ * Los topes se ampliaron junto con la fórmula de oro.
+ *
+ * El 2.5 y el 0.96 estaban puestos para una fórmula que crecía sin freno con el
+ * oro absoluto, y ahí tenían sentido. Con la proporción el número ya se frena
+ * solo, y el tope viejo pasó a ser el que mentía: recortaba a 92.9% tanto una
+ * ventaja de 5k al minuto 25 como una de 15k al 35, que no son lo mismo.
+ *
+ * La medición dice además que arriba el modelo se queda CORTO, no largo: en el
+ * tramo donde predice 94% la realidad es 96%. Los valores nuevos son los que se
+ * usaron en la validación fuera de muestra que dio Brier 0.1312.
+ */
+export const CLAMP = { stateLogOdds: 4.0, pMin: 0.02, pMax: 0.98 };
 
 /**
  * @param {object} input
@@ -128,7 +186,7 @@ export const CLAMP = { stateLogOdds: 2.5, pMin: 0.04, pMax: 0.96 };
  * @param {number|null} input.minute
  */
 export function buildProbability({
-  recordA, recordB, tfDelta, goldDiff, minute, finished = false,
+  recordA, recordB, tfDelta, goldDiff, goldTotal = null, minute, finished = false,
   corpusTeam = null, draftWeight = null, sideRate = null, elo = null,
 }) {
   const components = [];
@@ -375,9 +433,14 @@ export function buildProbability({
         'draft antes de jugarse. Eso es lo único que sirve para calibrar.',
     });
   } else if (goldDiff !== null && goldDiff !== undefined && minute) {
-    // El mismo oro pesa más tarde que temprano.
-    const ramp = Math.min(1, Math.max(0, (minute - 8) / 17));
-    const raw = WEIGHTS.goldPerK * (goldDiff / 1000) * ramp;
+    // Lo que pesa es la PROPORCIÓN de oro, no la cantidad. Ver GOLD arriba: la
+    // rampa anterior tenía el signo cambiado.
+    const total = goldTotal && goldTotal > 0
+      ? goldTotal
+      : Math.max(10000, GOLD.totalPorMinuto * minute + GOLD.totalBase);
+    const share = goldDiff / total;
+    const C = goldCoef(minute);
+    const raw = C * share;
     const contrib = Math.max(-CLAMP.stateLogOdds, Math.min(CLAMP.stateLogOdds, raw));
     x += contrib;
     components.push({
@@ -385,15 +448,17 @@ export function buildProbability({
       label: 'Estado de la partida',
       detail:
         `${goldDiff >= 0 ? '+' : ''}${goldDiff.toLocaleString('es')} de oro al minuto ${minute.toFixed(0)} · ` +
-        `peso por minuto ×${ramp.toFixed(2)}` +
+        `${(share * 100).toFixed(1)}% del oro en juego` +
+        (goldTotal ? '' : ' (total estimado)') +
         (contrib !== raw ? ` · acotado desde ${raw.toFixed(2)}` : ''),
       contrib,
       note:
-        Math.abs(goldDiff) < 1000 && minute >= 20
-          ? 'Menos de 1k al minuto 20 es empate, y el empate favorece a quien tiene mejor tardío.'
+        Math.abs(share) < 0.015 && minute >= 20
+          ? 'Menos de 1.5% del oro al minuto 20 es empate, y el empate favorece a quien tiene mejor tardío.'
           : contrib !== raw
-            ? 'Aporte acotado: el modelo es lineal y crudo, no puede afirmar certezas.'
-            : null,
+            ? 'Aporte acotado: el modelo no puede afirmar certezas.'
+            : 'Medido sobre 1551 observaciones de 320 partidas: la proporción de oro predice mucho ' +
+              'mejor que la cantidad, porque el oro total crece durante la partida.',
     });
   }
 

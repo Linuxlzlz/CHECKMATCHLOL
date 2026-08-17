@@ -229,6 +229,38 @@ export const EVIDENCE = {
   },
 
   /**
+   * La curva de oro, medida en vez de supuesta.
+   *
+   * Se bajaron los frames del feed de 320 partidas del corpus en los minutos
+   * 10, 15, 20, 25, 30 y 35 —1551 observaciones, cero fallos— y se ajustó el
+   * coeficiente del oro en cada minuto, con el Elo dentro del modelo para no
+   * atribuirle al oro la fuerza del equipo.
+   *
+   * El modelo suponía que el mismo oro pesa MÁS tarde (una rampa de 0.06 a
+   * 0.55 entre los minutos 8 y 25). Es al revés, y por una razón simple: el
+   * oro total crece. 2000 de ventaja sobre 32 000 al minuto 10 es una brecha
+   * enorme; sobre 128 000 al minuto 35 es ruido.
+   *
+   * Por eso la variable correcta es la PROPORCIÓN. Con ella el coeficiente deja
+   * de depender del minuto: su variación cae de 0.33 a 0.137.
+   */
+  oro: {
+    observaciones: 1551,
+    partidas: 320,
+    porMinuto: {
+      10: { coef: 0.88, coefViejo: 0.06, oroTotalMedio: 32380, ganaElQueVaArriba: 0.74 },
+      15: { coef: 0.62, coefViejo: 0.23, oroTotalMedio: 50915, ganaElQueVaArriba: 0.75 },
+      20: { coef: 0.50, coefViejo: 0.39, oroTotalMedio: 71058, ganaElQueVaArriba: 0.79 },
+      25: { coef: 0.46, coefViejo: 0.55, oroTotalMedio: 90734, ganaElQueVaArriba: 0.85 },
+      30: { coef: 0.46, coefViejo: 0.55, oroTotalMedio: 110055, ganaElQueVaArriba: 0.80 },
+      35: { coef: 0.31, coefViejo: 0.55, oroTotalMedio: 128092, ganaElQueVaArriba: 0.75 },
+    },
+    variacionDelCoeficiente: { absoluto: 0.33, proporcion: 0.137 },
+    fueraDeMuestra: { n: 466, formulaVieja: 0.1431, proporcion: 0.1312, mejora: 0.0119 },
+    params: { base: 15, porMinuto: 1.1, tope: 50 },
+  },
+
+  /**
    * Elo: fuerza de equipo que pondera contra quién jugaste.
    *
    * Medido POR MAPA, que es la unidad en la que el modelo predice. La primera

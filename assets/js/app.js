@@ -882,6 +882,9 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     recordA: recA, recordB: recB,
     tfDelta: score.tfDelta,
     goldDiff: st ? st.a.gold - st.b.gold : null,
+    // Lo que pesa es la proporción, no la cantidad: 2k al minuto 10 y 2k al 35
+    // son cosas distintas porque el oro en juego se triplicó.
+    goldTotal: st ? st.a.gold + st.b.gold : null,
     minute,
     finished: game?.state === 'completed',
     corpusTeam,
