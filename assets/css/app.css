@@ -614,3 +614,34 @@ code {
   color: var(--gold); line-height: 1; white-space: nowrap;
 }
 .mvp-rating span { font-size: 12px; color: var(--text-mute); }
+
+/* ---------- grupos plegables ----------
+   La vista de un partido tenía 20 tarjetas juntas. Se agrupan por a quién le
+   sirven: abierto lo que se lee, plegado lo que se audita. */
+.grupo {
+  background: var(--bg-raise); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden;
+}
+.grupo > summary {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 13px 16px; list-style: none; background: var(--bg-card);
+  transition: background .15s;
+}
+.grupo > summary::-webkit-details-marker { display: none; }
+.grupo > summary:hover { background: #1a2130; }
+.grupo-t { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+.grupo-r { font-size: 12px; color: var(--text-mute); flex: 1; min-width: 0; }
+.grupo-x {
+  width: 8px; height: 8px; flex-shrink: 0; margin-right: 2px;
+  border-right: 2px solid var(--text-mute); border-bottom: 2px solid var(--text-mute);
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .18s;
+}
+.grupo[open] > summary { border-bottom: 1px solid var(--line); }
+.grupo[open] .grupo-x { transform: rotate(225deg) translate(-2px, -2px); }
+.grupo-body { padding: 12px; display: grid; gap: 12px; background: var(--bg-inset); }
+/* Las tarjetas de adentro ya no necesitan su propio marco de color. */
+.grupo-body > .card { background: var(--bg-raise); }
+
+@media (max-width: 560px) {
+  .grupo-r { display: none; }
+}

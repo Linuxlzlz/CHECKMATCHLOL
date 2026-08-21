@@ -400,6 +400,35 @@ function matchItem(e, isLive) {
  * escribiendo. Un panel que se reinicia solo mientras lo leés es inservible
  * justo cuando más sirve, que es con el mapa en curso.
  */
+/**
+ * Agrupa tarjetas detrás de un plegable.
+ *
+ * La vista de un partido llegó a tener 20 tarjetas, 27.000 caracteres y unos
+ * 800 números en pantalla a la vez. Nada de eso sobra —está todo medido y cada
+ * número se ganó su lugar— pero puesto todo junto no se lee: lo importante
+ * queda enterrado entre la auditoría del modelo.
+ *
+ * La solución no es borrar mediciones sino ordenarlas por a quién le sirven:
+ * arriba y abierto lo que contesta "qué va a pasar y por qué", plegado lo que
+ * contesta "¿y esto cuánto vale?". Un clic de distancia, no un dato menos.
+ *
+ * setContent() recuerda qué grupos quedaron abiertos, así que el refresco en
+ * vivo no los cierra en la cara del que estaba leyendo.
+ */
+function grupo(k, titulo, resumen, contenido, open = false) {
+  const cuerpo = (Array.isArray(contenido) ? contenido : [contenido]).filter(Boolean).join('');
+  if (!cuerpo) return '';
+  return `
+  <details class="grupo" data-k="${esc(k)}"${open ? ' open' : ''}>
+    <summary>
+      <span class="grupo-t">${esc(titulo)}</span>
+      <span class="grupo-r">${esc(resumen)}</span>
+      <span class="grupo-x" aria-hidden="true"></span>
+    </summary>
+    <div class="grupo-body">${cuerpo}</div>
+  </details>`;
+}
+
 function setContent(html, { preserve = false } = {}) {
   const el = $('#content');
   if (!preserve) {
@@ -962,26 +991,39 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   state.diagnostics = diagnostics;
 
   setContent([
+    // --- Lo que se lee siempre: qué va a pasar y en qué mirar ---
     matchHeader(ev, game, games, outcome),
     cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnostics, win7, resolved, entry: entryNow }),
-    cardDiagnostics(diagnostics),
     st ? cardLiveState(st, minute, game) : '',
     checkpoints.length ? cardCheckpoints(checkpoints, blue, red) : '',
     cardDraft(blue, red, lanes, rosterA, rosterB),
-    cardIndex(score),
-    cardConcentration(edges, axes, blue, red),
-    cardRiot(rAxes, cross, blue, red, riotMap),
-    cardValidation(validation),
-    cardDiscovery(state.metaIndex ? cachedDiscovery() : null),
-    roleGold ? cardRoleGold(roleGold, goldConc, edges, blue, red, minute) : '',
-    merged ? cardPlayerDetail(merged, blue, red) : '',
-    cardChampionLayer(chLayerA, chLayerB, blue, red),
-    cardPlayerLayer(plLayerA, plLayerB, blue, red, chLayerA, chLayerB, rosterA, rosterB),
-    cardPatch(meta.patchVersion, blue, red),
-    cardWindow(win7, state.metaIndex),
     cardReading(score, prob, stance, blue, red, disagreement, entryNow, resolved),
     st ? cardSignals(st, minute, dSignals) : cardSignalsPreview(),
-    cardMatchupChecklist(),
+
+    // --- Por qué: el razonamiento sobre el draft ---
+    grupo('g-draft', 'Por qué', 'índice, dónde se concentra la ventaja y ventana', [
+      cardIndex(score),
+      cardConcentration(edges, axes, blue, red),
+      roleGold ? cardRoleGold(roleGold, goldConc, edges, blue, red, minute) : '',
+      cardWindow(win7, state.metaIndex),
+      cardMatchupChecklist(),
+    ]),
+
+    // --- Quién: los diez que juegan ---
+    grupo('g-jugadores', 'Los que juegan', 'campeones, jugadores y rendimiento en vivo', [
+      merged ? cardPlayerDetail(merged, blue, red) : '',
+      cardChampionLayer(chLayerA, chLayerB, blue, red),
+      cardPlayerLayer(plLayerA, plLayerB, blue, red, chLayerA, chLayerB, rosterA, rosterB),
+      cardRiot(rAxes, cross, blue, red, riotMap),
+    ]),
+
+    // --- Cuánto vale: la auditoría del propio modelo ---
+    grupo('g-modelo', 'Cuánto vale esto', 'validación, qué predice de verdad y diagnóstico', [
+      cardValidation(validation),
+      cardDiscovery(state.metaIndex ? cachedDiscovery() : null),
+      cardPatch(meta.patchVersion, blue, red),
+      cardDiagnostics(diagnostics),
+    ]),
   ].join(''), { preserve });
 
   bindGameTabs();
