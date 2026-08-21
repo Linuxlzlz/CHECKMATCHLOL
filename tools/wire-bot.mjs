@@ -526,6 +526,7 @@ function describeCreds(creds) {
  */
 /** Tabla de Elo de la corrida: se arma en el primer sondeo y se reusa. */
 let _eloFor = null;
+let _sideRate = null;
 
 const runBudget = { posted: 0, notified: 0 };
 
@@ -611,13 +612,13 @@ async function runOnce({ cycle = 0 } = {}) {
   let eloFor = _eloFor;
   if (cycle === 0) {
     try {
-      const [{ updateCorpus, loadCorpus, makeEloFor }, elo, outcome, api] = await Promise.all([
+      const [{ updateCorpus, loadCorpus, makeEloFor, sideRateFrom }, elo, outcome, api] = await Promise.all([
         import('./elo-store.mjs'),
         import('../assets/js/engine/elo.js'),
         import('../assets/js/engine/outcome.js'),
         import('../assets/js/api.js'),
       ]);
-      const dias = num(process.env.WIRE_ELO_DAYS, 45);
+      const dias = num(process.env.WIRE_ELO_DAYS, 150);
       console.log(`Actualizando corpus de Elo (${dias} días hacia atrás):`);
       const r = await updateCorpus(
         { getSchedule: api.getSchedule, getEventDetails: api.getEventDetails,
@@ -629,18 +630,27 @@ async function runOnce({ cycle = 0 } = {}) {
         `Corpus de Elo: ${r.total} mapas (${r.added} nuevos` +
         `${r.sinResolver ? `, ${r.sinResolver} sin ganador resoluble` : ''}).`
       );
+      const corpus = loadCorpus();
       eloFor = makeEloFor(
         { buildElo: elo.buildElo, eloFor: elo.eloFor, eloLogOdds: elo.eloLogOdds,
           MIN_PARTIDAS_ELO: elo.MIN_PARTIDAS_ELO },
-        loadCorpus()
+        corpus
       );
       _eloFor = eloFor;
+      // Tasa de lado medida en el corpus propio, en vez del valor congelado.
+      _sideRate = sideRateFrom(corpus);
+      if (_sideRate) {
+        console.log(
+          `Lado azul en el corpus: ${(_sideRate.cruda * 100).toFixed(1)}% crudo sobre ` +
+          `${_sideRate.n} mapas · ${(_sideRate.p * 100).toFixed(1)}% tras encoger hacia 50%.`
+        );
+      }
       if (!eloFor) console.log('Corpus vacío todavía: esta corrida predice con el récord del split.');
     } catch (e) {
       console.warn(`No se pudo preparar el Elo: ${e.message}. Se sigue con el récord del split.`);
     }
   }
-  const added = await wire.tick({ leagues, recordFor: null, eloFor, backfillHours, matchIds, onlyKind, regenerate });
+  const added = await wire.tick({ leagues, recordFor: null, eloFor, sideRate: _sideRate?.p ?? null, backfillHours, matchIds, onlyKind, regenerate });
   console.log(`Nuevas publicaciones en cola: ${added}`);
   if (!added && matchIds.length) {
     console.warn(

@@ -248,7 +248,7 @@ async function resolveMatch(rawId) {
  * @param {object} opts.standingsFor  (tournamentId) => standings, para la calidad de equipos
  */
 export async function tick({
-  leagues = LEAGUES, recordFor = null, eloFor = null, backfillHours = 0, matchIds = [], onlyKind = null,
+  leagues = LEAGUES, recordFor = null, eloFor = null, sideRate = null, backfillHours = 0, matchIds = [], onlyKind = null,
   regenerate = false,
 } = {}) {
   let added = 0;
@@ -337,6 +337,9 @@ export async function tick({
           goldDiff: null,
           minute: null,
           elo,
+          // Tasa de lado medida en el corpus propio. Sin esto el bot caía al valor
+          // congelado de EVIDENCE, igual que le pasaba al Elo.
+          sideRate,
           // Mismo criterio que el sitio: si la medición dice que el índice no
           // separa ganadores, el draft entra en cero. Antes el bot lo pesaba
           // 0.30 mientras la propia tarjeta decía que no tiene respaldo.

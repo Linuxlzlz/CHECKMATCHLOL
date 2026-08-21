@@ -76,7 +76,7 @@ jobs:
           WIRE_BACKFILL: ${{ vars.WIRE_BACKFILL || '6' }}
           # Ventana del corpus de Elo la primera vez que se construye. Después
           # cada corrida solo pide lo nuevo, así que esto casi no vuelve a pesar.
-          WIRE_ELO_DAYS: ${{ vars.WIRE_ELO_DAYS || '45' }}
+          WIRE_ELO_DAYS: ${{ vars.WIRE_ELO_DAYS || '150' }}
           WIRE_MATCH: ${{ vars.WIRE_MATCH }}
           WIRE_ONLY: ${{ vars.WIRE_ONLY }}
         run: node tools/wire-bot.mjs

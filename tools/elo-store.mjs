@@ -83,7 +83,7 @@ export function toEloMaps(corpus) {
  * @param {object} opts  { leagues, dias, log }
  * @returns {{added:number, leidas:number, sinResolver:number}}
  */
-export async function updateCorpus(deps, { leagues, dias = 45, log = () => {} } = {}) {
+export async function updateCorpus(deps, { leagues, dias = 150, log = () => {} } = {}) {
   const { getSchedule, getEventDetails, getFinalWindow, pool, finalStateOf, resolveSeries } = deps;
   const corpus = loadCorpus();
   const yaTengo = new Set(corpus.maps.map((m) => m.g));
@@ -134,6 +134,7 @@ export async function updateCorpus(deps, { leagues, dias = 45, log = () => {} } 
         .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
         .map((g) => ({
           gameId: g.id,
+          number: g.number,
           blueTeamId: g.teams?.find((t) => t.side === 'blue')?.id ?? null,
           redTeamId: g.teams?.find((t) => t.side === 'red')?.id ?? null,
           final: null,
@@ -172,6 +173,7 @@ export async function updateCorpus(deps, { leagues, dias = 45, log = () => {} } 
         corpus.maps.push({
           g: g.gameId,
           d: (item.startTime ?? '').slice(0, 10),
+          n: g.number ?? null,   // número de mapa: el lado solo se sortea en el primero
           b: g.blueTeamId,
           r: g.redTeamId,
           w: winnerTeamId === g.blueTeamId ? 'blue' : 'red',
@@ -208,4 +210,45 @@ export function makeEloFor({ buildElo, eloFor, eloLogOdds, MIN_PARTIDAS_ELO }, c
     if ((a.partidas ?? 0) < MIN_PARTIDAS_ELO || (b.partidas ?? 0) < MIN_PARTIDAS_ELO) return null;
     return { a, b, logOdds: eloLogOdds(a, b) };
   };
+}
+
+/**
+ * Tasa de victoria del lado azul medida en el corpus propio.
+ *
+ * `buildProbability` ya tenía un componente de lado, pero el bot nunca le
+ * pasaba nada, así que caía al valor congelado de EVIDENCE (51.7%, medido sobre
+ * 867 primeros mapas de un corpus de tres splits). El sitio sí lo pasa medido.
+ * Es el mismo hueco que tenía el Elo: la capacidad estaba y el bot no la usaba.
+ *
+ * Medido camino adelante sobre 152 mapas que el ajuste no vio, comparando qué
+ * tasa usar junto al Elo:
+ *
+ *   congelada 51.7%                Brier 0.2406   59% [51,67]
+ *   solo primeros mapas, encogida  Brier 0.2407   59% [51,67]
+ *   todos los mapas, encogida      Brier 0.2375   61% [53,68]
+ *
+ * TENSIÓN DECLARADA, porque acá es fácil engañarse. El comentario de
+ * probability.js advierte que la ventaja de lado global mezcla el sorteo del
+ * mapa 2, donde el azul es el ganador del mapa anterior el 85-88% de las veces,
+ * y que contarla sería sumar fuerza de equipo por tercera vez. Ese razonamiento
+ * sigue siendo correcto como CAUSA. Lo que dice la medición de arriba es otra
+ * cosa: que el Elo de un corpus joven no alcanza a capturar ese efecto, así que
+ * mientras tanto la tasa global predice mejor.
+ *
+ * Por eso: se encoge hacia 50% por tamaño de muestra, se acota, y se guarda el
+ * número de mapa para poder rehacer esta comparación cuando el corpus madure.
+ * Si el Elo termina absorbiendo el efecto, esta tasa debería volver sola hacia
+ * el 51.7% y el componente dejará de aportar.
+ */
+export const SIDE = { minMapas: 100, K: 200, piso: 0.50, techo: 0.62 };
+
+export function sideRateFrom(corpus) {
+  const maps = corpus?.maps ?? [];
+  if (maps.length < SIDE.minMapas) return null;
+  const azul = maps.filter((m) => m.w === 'blue').length;
+  const cruda = azul / maps.length;
+  // Encoge hacia 50%: un corpus chico no puede afirmar una ventaja grande.
+  const encogida = 0.5 + (cruda - 0.5) * (maps.length / (maps.length + SIDE.K));
+  const acotada = Math.min(SIDE.techo, Math.max(SIDE.piso, encogida));
+  return { p: acotada, cruda, n: maps.length };
 }
