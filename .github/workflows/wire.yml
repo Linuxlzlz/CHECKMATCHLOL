@@ -54,6 +54,10 @@ jobs:
           WIRE_VERIFY: ${{ vars.WIRE_VERIFY }}
           WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
           WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
+          # Antigüedad máxima para que algo salga solo. Un "pre" viejo es falso
+          # (anuncia como en vivo algo que ya terminó); un "post" viejo solo es tardío.
+          WIRE_MAX_AGE_PRE_MIN: ${{ vars.WIRE_MAX_AGE_PRE_MIN || '45' }}
+          WIRE_MAX_AGE_POST_HOURS: ${{ vars.WIRE_MAX_AGE_POST_HOURS || '12' }}
           WIRE_MEDIA: ${{ vars.WIRE_MEDIA }}
           WIRE_CARD: ${{ vars.WIRE_CARD }}
           WIRE_INTENT: ${{ vars.WIRE_INTENT }}

@@ -332,7 +332,8 @@ async function deliverFree(pending) {
   // Los webhooks de Discord aceptan unas 5 peticiones cada 2 segundos. Con seis
   // ligas, una tanda de avisos juntos pasa ese techo y empiezan los 429. Se
   // manda de a poco y con pausa: no hay apuro, el partido ya terminó.
-  const max = num(process.env.WIRE_MAX_NOTIFY, 8);
+  // Igual que el tope de publicación: es por corrida, no por sondeo.
+  const max = Math.max(0, num(process.env.WIRE_MAX_NOTIFY, 8) - runBudget.notified);
   const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
   // Volver a mandar algo ya avisado. Se usa al cambiar el diseño de la tarjeta:
   // sin esto, lo viejo queda entregado con el formato de ayer y no hay forma de
@@ -353,6 +354,7 @@ async function deliverFree(pending) {
       if (discord) await sendDiscord(p, discord, card);
       sent[p.id] = new Date().toISOString();
       n++;
+      runBudget.notified++;
       console.log(`avisado ${p.id}${card ? ' (con tarjeta)' : ''}`);
       await pausa(1300);
     } catch (e) {
@@ -516,6 +518,14 @@ function describeCreds(creds) {
   return avisos.length;
 }
 
+/**
+ * Presupuesto de la CORRIDA entera, compartido entre sondeos.
+ *
+ * La vigilancia continua ejecuta runOnce() muchas veces por corrida. Sin esto,
+ * cada tope de volumen se multiplicaría por la cantidad de sondeos.
+ */
+const runBudget = { posted: 0, notified: 0 };
+
 async function runOnce({ cycle = 0 } = {}) {
   // Modo comprobación: no toca las ligas ni la cola, solo valida las llaves.
   if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
@@ -599,12 +609,42 @@ async function runOnce({ cycle = 0 } = {}) {
     );
   }
 
-  const live = String(process.env.WIRE_LIVE ?? '').toLowerCase() === 'true';
-  const maxPerRun = num(process.env.WIRE_MAX_PER_RUN, 4);
+  const live = String(process.env.WIRE_LIVE ?? "").toLowerCase() === "true";
+
+  // El tope es POR CORRIDA, no por sondeo.
+  //
+  // Con la vigilancia continua, runOnce() se ejecuta ~16 veces en una corrida de
+  // 25 minutos. Si el tope se leyera acá tal cual, un WIRE_MAX_PER_RUN=1 se
+  // convertiría en 16 publicaciones por corrida y quemaría la cuota diaria de X
+  // en una sola pasada. El presupuesto se descuenta entre sondeos.
+  const maxPerRun = Math.max(0, num(process.env.WIRE_MAX_PER_RUN, 4) - runBudget.posted);
   const withMedia = String(process.env.WIRE_MEDIA ?? 'true').toLowerCase() === 'true';
 
-  const pending = wire.queue().filter((p) => !p.posted).reverse(); // más viejas primero
-  console.log(`Pendientes: ${pending.length}`);
+  // Filtro de antigüedad, para no publicar el pasado como si fuera el presente.
+  //
+  // La cola es idempotente y se acumula: al encender WIRE_LIVE con 52 entradas
+  // dentro, sin esto saldría un aviso "EN VIVO" por cada mapa de los últimos
+  // días, todos ya terminados. Un "pre" viejo es directamente falso; un "post"
+  // viejo solo es tardío, así que toleran distinto.
+  const maxPreMin  = num(process.env.WIRE_MAX_AGE_PRE_MIN, 45);
+  const maxPostH   = num(process.env.WIRE_MAX_AGE_POST_HOURS, 12);
+  const edadMin = (p) => (Date.now() - new Date(p.createdAt).getTime()) / 60000;
+  const vigente = (p) => {
+    const limite = p.kind === "pre" ? maxPreMin : maxPostH * 60;
+    return edadMin(p) <= limite;
+  };
+
+  const todas = wire.queue().filter((p) => !p.posted).reverse(); // más viejas primero
+  const pending = todas.filter(vigente);
+  const vencidas = todas.length - pending.length;
+  console.log(`Pendientes: ${pending.length}${vencidas ? ` (${vencidas} descartadas por antigüedad)` : ''}`);
+  if (vencidas) {
+    console.log(
+      `  Se omiten ${vencidas} entrada(s) más viejas que el límite ` +
+      `(pre ${maxPreMin} min, post ${maxPostH} h). Siguen en la cola y se pueden\n` +
+      '  ver o publicar a mano desde #/wire; simplemente no salen solas.'
+    );
+  }
 
   // Los canales gratuitos van SIEMPRE, publique o no en X: son la red de
   // seguridad cuando la cuota se agota, y no cuestan nada.
@@ -677,6 +717,7 @@ async function runOnce({ cycle = 0 } = {}) {
       const res = await postTweet(p.text, mediaIds, creds);
       wire.markPosted(p.id, true);
       posted++;
+      runBudget.posted++;
       console.log(`publicado ${p.id} -> ${res?.data?.id ?? '?'}`);
     } catch (e) {
       // Un fallo no debe bloquear la cola entera ni reintentar en bucle: se deja
