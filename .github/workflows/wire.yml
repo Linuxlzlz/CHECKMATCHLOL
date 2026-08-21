@@ -74,17 +74,27 @@ jobs:
           # un mapa entero puede empezar y terminar sin ser visto, y getLive() solo
           # muestra lo que está en curso. El backfill lo rescata en el primer sondeo.
           WIRE_BACKFILL: ${{ vars.WIRE_BACKFILL || '6' }}
+          # Ventana del corpus de Elo la primera vez que se construye. Después
+          # cada corrida solo pide lo nuevo, así que esto casi no vuelve a pesar.
+          WIRE_ELO_DAYS: ${{ vars.WIRE_ELO_DAYS || '45' }}
           WIRE_MATCH: ${{ vars.WIRE_MATCH }}
           WIRE_ONLY: ${{ vars.WIRE_ONLY }}
         run: node tools/wire-bot.mjs
 
-      - name: Guardar el estado de la cola
+      - name: Guardar el estado de la cola y el corpus de Elo
         run: |
-          if [ -n "$(git status --porcelain tools/wire-state.json)" ]; then
+          # El corpus de Elo también se guarda: si no sobrevive a la corrida, cada
+          # ejecución volvería a construirlo desde cero y el bot no tendría
+          # historia con la que medir fuerza de equipo.
+          ARCHIVOS="tools/wire-state.json tools/elo-corpus.json"
+          if [ -n "$(git status --porcelain $ARCHIVOS)" ]; then
             git config user.name  "checkmatch-wire"
             git config user.email "wire@users.noreply.github.com"
-            git add tools/wire-state.json
+            git add $ARCHIVOS
             git commit -m "wire: estado de la cola [skip ci]"
+            # Otra corrida pudo haber empujado mientras esta trabajaba: se rebasa
+            # sobre lo suyo en vez de fallar y perder lo de esta.
+            git pull --rebase --autostash || true
             git push
           else
             echo "sin cambios en el estado"

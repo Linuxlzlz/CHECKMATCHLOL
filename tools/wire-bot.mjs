@@ -524,6 +524,9 @@ function describeCreds(creds) {
  * La vigilancia continua ejecuta runOnce() muchas veces por corrida. Sin esto,
  * cada tope de volumen se multiplicaría por la cantidad de sondeos.
  */
+/** Tabla de Elo de la corrida: se arma en el primer sondeo y se reusa. */
+let _eloFor = null;
+
 const runBudget = { posted: 0, notified: 0 };
 
 async function runOnce({ cycle = 0 } = {}) {
@@ -599,7 +602,45 @@ async function runOnce({ cycle = 0 } = {}) {
   const regenerate = String(process.env.WIRE_REGENERATE ?? '').toLowerCase() === 'true';
   if (regenerate) console.log('Regenerando entradas ya encoladas con el formato actual.');
 
-  const added = await wire.tick({ leagues, recordFor: null, backfillHours, matchIds, onlyKind, regenerate });
+
+  // Fuerza de equipo: el componente que más pesa, y el que al bot le faltaba.
+  //
+  // Solo en el primer sondeo de la corrida: el corpus cambia cuando terminan
+  // partidos, no cada 90 segundos. Si falla, el bot sigue con el récord del
+  // split, que es el plan B y ya estaba.
+  let eloFor = _eloFor;
+  if (cycle === 0) {
+    try {
+      const [{ updateCorpus, loadCorpus, makeEloFor }, elo, outcome, api] = await Promise.all([
+        import('./elo-store.mjs'),
+        import('../assets/js/engine/elo.js'),
+        import('../assets/js/engine/outcome.js'),
+        import('../assets/js/api.js'),
+      ]);
+      const dias = num(process.env.WIRE_ELO_DAYS, 45);
+      console.log(`Actualizando corpus de Elo (${dias} días hacia atrás):`);
+      const r = await updateCorpus(
+        { getSchedule: api.getSchedule, getEventDetails: api.getEventDetails,
+          getFinalWindow: api.getFinalWindow, pool: api.pool,
+          finalStateOf: outcome.finalStateOf, resolveSeries: outcome.resolveSeries },
+        { leagues, dias, log: (s) => console.log(s) }
+      );
+      console.log(
+        `Corpus de Elo: ${r.total} mapas (${r.added} nuevos` +
+        `${r.sinResolver ? `, ${r.sinResolver} sin ganador resoluble` : ''}).`
+      );
+      eloFor = makeEloFor(
+        { buildElo: elo.buildElo, eloFor: elo.eloFor, eloLogOdds: elo.eloLogOdds,
+          MIN_PARTIDAS_ELO: elo.MIN_PARTIDAS_ELO },
+        loadCorpus()
+      );
+      _eloFor = eloFor;
+      if (!eloFor) console.log('Corpus vacío todavía: esta corrida predice con el récord del split.');
+    } catch (e) {
+      console.warn(`No se pudo preparar el Elo: ${e.message}. Se sigue con el récord del split.`);
+    }
+  }
+  const added = await wire.tick({ leagues, recordFor: null, eloFor, backfillHours, matchIds, onlyKind, regenerate });
   console.log(`Nuevas publicaciones en cola: ${added}`);
   if (!added && matchIds.length) {
     console.warn(

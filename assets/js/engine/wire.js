@@ -248,7 +248,7 @@ async function resolveMatch(rawId) {
  * @param {object} opts.standingsFor  (tournamentId) => standings, para la calidad de equipos
  */
 export async function tick({
-  leagues = LEAGUES, recordFor = null, backfillHours = 0, matchIds = [], onlyKind = null,
+  leagues = LEAGUES, recordFor = null, eloFor = null, backfillHours = 0, matchIds = [], onlyKind = null,
   regenerate = false,
 } = {}) {
   let added = 0;
@@ -326,12 +326,17 @@ export async function tick({
           league.id, [sides.a.team, sides.b.team], ev.match?.id ?? ev.id ?? null
         );
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
+        // Fuerza de equipo medida contra quién jugó cada uno. Cuando está, el
+        // récord no entra: buildProbability los trata como alternativas, no
+        // como suma, porque miden lo mismo.
+        const elo = eloFor ? eloFor(sides.a.teamId, sides.b.teamId) : null;
         const prob = buildProbability({
           recordA: rec?.a ?? formA ?? null,
           recordB: rec?.b ?? formB ?? null,
           tfDelta: score.tfDelta,
           goldDiff: null,
           minute: null,
+          elo,
           // Mismo criterio que el sitio: si la medición dice que el índice no
           // separa ganadores, el draft entra en cero. Antes el bot lo pesaba
           // 0.30 mientras la propia tarjeta decía que no tiene respaldo.
