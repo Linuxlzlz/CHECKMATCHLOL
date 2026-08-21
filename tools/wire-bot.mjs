@@ -516,7 +516,7 @@ function describeCreds(creds) {
   return avisos.length;
 }
 
-async function main() {
+async function runOnce({ cycle = 0 } = {}) {
   // Modo comprobación: no toca las ligas ni la cola, solo valida las llaves.
   if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
     const creds = readCreds();
@@ -566,7 +566,9 @@ async function main() {
   // Para PROBAR hace falta alcanzar un partido que ya terminó: en operación
   // normal el vigilante solo ve lo que está en vivo, y cuando el evento sale del
   // feed en vivo ese mapa queda fuera de alcance para siempre.
-  const backfillHours = num(process.env.WIRE_BACKFILL, 0);
+  // El backfill solo tiene sentido en el primer ciclo: rastrea hacia atrás y lo
+  // que encuentre ya queda en la cola, que es idempotente.
+  const backfillHours = cycle === 0 ? num(process.env.WIRE_BACKFILL, 0) : 0;
   const matchIds = (process.env.WIRE_MATCH ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
   // Con partidos forzados la liga no filtra nada, así que no tiene sentido que un
@@ -703,6 +705,68 @@ async function main() {
   }
   console.log(`\nPublicados: ${posted}`);
   store.flush();
+}
+
+/**
+ * Bucle de vigilancia — la corrección del problema de latencia.
+ *
+ * El cron dice "cada 10 minutos" y GitHub no lo cumple ni de cerca. Medido
+ * sobre 59 intervalos reales: NINGUNO bajó de 10 minutos, la mediana fue 35 y
+ * el máximo 107. Como el bot solo descubre partidos con getLive(), esa cadencia
+ * es exactamente su resolución: el retraso medido entre el arranque real del
+ * mapa y el encolado fue de 19 minutos de mediana y 30 de promedio, con casos
+ * de 45 a 53. Un mapa dura ~32 minutos, así que la mitad de los avisos "EN
+ * VIVO" salían con la partida más que por la mitad, y algunos ya terminada.
+ *
+ * Peor: con huecos de 107 minutos, un mapa entero empieza y termina entre dos
+ * corridas. Como getLive() solo muestra lo que está en curso, ese mapa no se ve
+ * nunca. Por eso además el backfill pasa a estar encendido en operación normal.
+ *
+ * La solución no es pedirle al cron que se porte bien, porque no depende de
+ * nosotros. Es que UNA corrida cubra una ventana larga sondeando por dentro:
+ * con WIRE_WATCH_MINUTES=25 y sondeo cada 90 s, la resolución pasa de ~35
+ * minutos a ~1.5, sin depender de que GitHub dispare a horario.
+ *
+ * Con WIRE_WATCH_MINUTES=0 se comporta igual que antes: una sola pasada. Eso
+ * mantiene las corridas manuales y las pruebas exactamente como estaban.
+ */
+async function main() {
+  // El modo comprobación valida llaves y sale: no tiene nada que vigilar.
+  if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
+    await runOnce({ cycle: 0 });
+    return;
+  }
+
+  const watchMinutes = num(process.env.WIRE_WATCH_MINUTES, 0);
+  const pollSeconds = Math.max(30, num(process.env.WIRE_POLL_SECONDS, 90));
+
+  if (watchMinutes <= 0) {
+    await runOnce({ cycle: 0 });
+    return;
+  }
+
+  const deadline = Date.now() + watchMinutes * 60_000;
+  console.log(
+    `Vigilancia continua: ${watchMinutes} min, sondeando cada ${pollSeconds} s.\n` +
+    'Esto existe porque el cron de Actions no cumple su frecuencia declarada.'
+  );
+
+  let cycle = 0;
+  while (Date.now() < deadline) {
+    if (cycle > 0) console.log(`\n===== sondeo ${cycle + 1} =====`);
+    try {
+      await runOnce({ cycle });
+    } catch (e) {
+      // Un ciclo que falla no puede cortar la vigilancia: la próxima vuelta
+      // reintenta sola dentro de la misma corrida.
+      console.error(`Ciclo ${cycle + 1} falló: ${e.message}`);
+    }
+    cycle++;
+    const quedan = deadline - Date.now();
+    if (quedan <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(pollSeconds * 1000, quedan)));
+  }
+  console.log(`\nVigilancia terminada: ${cycle} sondeo(s) en ${watchMinutes} min.`);
 }
 
 main().catch((e) => {

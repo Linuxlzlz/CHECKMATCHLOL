@@ -6,9 +6,11 @@ name: wire
 
 on:
   schedule:
-    # Cada 10 minutos. Los mapas duran ~32 min de media, así que esta frecuencia
-    # alcanza para agarrar el arranque y el cierre de cada uno.
-    - cron: '*/10 * * * *'
+    # Se pide cada 5 minutos sabiendo que GitHub NO lo va a cumplir: medido sobre
+    # 59 intervalos reales, ninguno bajó de 10 min, la mediana fue 35 y el máximo
+    # 107. Lo que garantiza la cobertura no es este cron sino WIRE_WATCH_MINUTES,
+    # que hace que cada corrida sondee por dentro durante 25 minutos.
+    - cron: '*/5 * * * *'
   workflow_dispatch:        # para correrlo a mano desde la pestaña Actions
 
 concurrency:
@@ -23,6 +25,8 @@ permissions:
 jobs:
   wire:
     runs-on: ubuntu-latest
+    # La corrida vigila 25 min por dentro; el margen cubre instalación y publicación.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +47,10 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           WIRE_LIVE: ${{ vars.WIRE_LIVE }}
+          # Vigilancia continua dentro de la corrida. Ver el comentario en wire-bot.mjs:
+          # el cron de Actions no cumple su frecuencia y esto es lo que la reemplaza.
+          WIRE_WATCH_MINUTES: ${{ vars.WIRE_WATCH_MINUTES || '25' }}
+          WIRE_POLL_SECONDS: ${{ vars.WIRE_POLL_SECONDS || '90' }}
           WIRE_VERIFY: ${{ vars.WIRE_VERIFY }}
           WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
           WIRE_MAX_PER_RUN: ${{ vars.WIRE_MAX_PER_RUN }}
@@ -58,8 +66,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          # Solo para pruebas: alcanzar partidos que ya terminaron.
-          WIRE_BACKFILL: ${{ vars.WIRE_BACKFILL }}
+          # Encendido en operación normal: con huecos de hasta 107 min entre corridas,
+          # un mapa entero puede empezar y terminar sin ser visto, y getLive() solo
+          # muestra lo que está en curso. El backfill lo rescata en el primer sondeo.
+          WIRE_BACKFILL: ${{ vars.WIRE_BACKFILL || '6' }}
           WIRE_MATCH: ${{ vars.WIRE_MATCH }}
           WIRE_ONLY: ${{ vars.WIRE_ONLY }}
         run: node tools/wire-bot.mjs
