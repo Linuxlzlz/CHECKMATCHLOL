@@ -961,6 +961,15 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     p: prob.p, tfDelta: score.tfDelta, band: score.tfBand.label,
     hadQuality: prob.hasQuality,
     layers: disagreement.layers.map((l) => `${l.name}: ${l.favors}`),
+    // Reglas candidatas, congeladas antes del resultado para poder puntuarlas
+    // después contra datos que ningún ajuste vio.
+    reglas: ledger.evaluarReglas({
+      pModelo: prob.p,
+      tfRaw: score.perAxis.find((a) => a.axis === 'teamfight')?.dRaw ?? null,
+      tfFavorsA: score.tfDelta > 0,
+      wrA: recA && recA.wins + recA.losses > 0 ? recA.wins / (recA.wins + recA.losses) : null,
+      wrB: recB && recB.wins + recB.losses > 0 ? recB.wins / (recB.wins + recB.losses) : null,
+    }),
   });
   for (const cp of checkpoints) {
     ledger.recordSnapshot(state.gameId, cp.minute, {
@@ -2597,6 +2606,32 @@ function renderLedger() {
         con λ*=0. Si tu Brier no baja de eso de forma sostenida, el número propio no está aportando
         sobre el precio y la postura NO BET sigue siendo la correcta.
       </div>
+
+      ${(() => {
+        const rs = ledger.scoreReglas(s.entries);
+        const filas = rs.map((r) => `
+          <div class="layer-row">
+            <div>
+              <div><strong>${esc(r.nombre)}</strong></div>
+              <div class="layer-reason">${r.n
+                ? `${r.hits}/${r.n} · IC95 [${(r.ic[0]*100).toFixed(0)}, ${(r.ic[1]*100).toFixed(0)}]`
+                : 'todavía sin partidos resueltos donde la regla se pronuncie'}</div>
+            </div>
+            <div class="row-val">${r.p != null ? `${(r.p*100).toFixed(0)}%` : '—'}</div>
+          </div>`).join('');
+        return `
+        <div style="margin-top:16px">
+          <div class="muted-xs" style="margin-bottom:6px"><strong>Reglas en prueba</strong></div>
+          ${filas}
+          <div class="note">
+            Cada regla se congela ANTES del resultado y se puntúa sola. La del teamfight con
+            récord parejo está acá por pedido: hacia atrás da 50% [45, 55] sobre 377 mapas,
+            contra 56% de simplemente elegir el lado azul. Si en vivo se porta distinto, esto lo
+            va a mostrar sin que haya que discutirlo — y ese es el único camino por el que una
+            señal se asciende a regla en este proyecto.
+          </div>
+        </div>`;
+      })()}
 
       <div style="margin:14px 0; display:flex; gap:8px; flex-wrap:wrap">
         <button class="btn btn-sm" id="exp-json">Exportar JSON</button>

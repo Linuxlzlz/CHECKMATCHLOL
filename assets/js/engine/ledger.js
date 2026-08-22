@@ -66,6 +66,8 @@ export function recordPrediction(gameId, data) {
       // limpiamente previa y no debería contar igual en la calibración.
       preGame: data.gameState !== 'completed' && !data.startedBefore,
     },
+    // Qué eligió cada regla candidata, congelado junto con la predicción.
+    reglas: data.reglas ?? null,
     market: [],
     snapshots: {},
     result: null,
@@ -275,4 +277,62 @@ export function exportCSV() {
     ].map(esc).join(',')
   );
   return [head.join(','), ...lines].join('\n');
+}
+
+/* ------------------------------------------------------------------ *
+ * reglas candidatas — test pre-registrado
+ * ------------------------------------------------------------------ */
+
+/**
+ * Reglas que compiten contra el modelo, registradas ANTES de conocer el
+ * resultado y puntuadas con datos que ningún ajuste vio.
+ *
+ * Existe porque "ninguna señal se asciende a regla hasta que sobreviva un test
+ * fuera de muestra pre-registrado", y porque medir retrospectivamente la misma
+ * hipótesis en muchos cortes distintos termina encontrando lo que uno busca.
+ * Acá el criterio queda fijado de antemano y solo se acumula.
+ *
+ * La regla del teamfight con récord parejo está acá por pedido explícito:
+ * retrospectivamente da 50% [45,55] sobre 377 mapas, contra 56% de simplemente
+ * elegir el lado azul. Si en vivo se comporta distinto, este registro lo va a
+ * mostrar sin que haga falta discutirlo.
+ */
+export const REGLAS = [
+  { id: 'modelo',        nombre: 'El modelo' },
+  { id: 'lado-azul',     nombre: 'Siempre el lado azul' },
+  { id: 'tf-siempre',    nombre: 'Siempre la mejor comp de teamfight' },
+  { id: 'tf-parejo',     nombre: 'Teamfight, solo con récord parejo' },
+];
+
+/**
+ * Calcula qué elige cada regla para un mapa. Devuelve 'A' | 'B' | null,
+ * donde null significa que la regla no se pronuncia en este partido.
+ */
+export function evaluarReglas({ pModelo, tfRaw, tfFavorsA, wrA, wrB }) {
+  const parejo = wrA != null && wrB != null && Math.abs(wrA - wrB) < 0.08;
+  const tfElige = tfRaw != null && Math.abs(tfRaw) >= 1 ? (tfFavorsA ? 'A' : 'B') : null;
+  return {
+    'modelo': pModelo == null || pModelo === 0.5 ? null : (pModelo > 0.5 ? 'A' : 'B'),
+    'lado-azul': 'A',
+    'tf-siempre': tfElige,
+    'tf-parejo': parejo ? tfElige : null,
+  };
+}
+
+/** Puntúa cada regla sobre las entradas ya resueltas. */
+export function scoreReglas(entries) {
+  const out = [];
+  for (const r of REGLAS) {
+    const usables = entries.filter((e) => e.result && e.reglas && e.reglas[r.id]);
+    const hits = usables.filter((e) => e.reglas[r.id] === e.result).length;
+    const n = usables.length;
+    let ic = null;
+    if (n) {
+      const z = 1.96, p = hits / n, d = 1 + (z * z) / n, c = p + (z * z) / (2 * n);
+      const m = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+      ic = [(c - m) / d, (c + m) / d];
+    }
+    out.push({ ...r, n, hits, p: n ? hits / n : null, ic });
+  }
+  return out;
 }
