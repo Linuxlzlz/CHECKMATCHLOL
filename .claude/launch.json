@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "checkmatch-static",
-      "url": "http://localhost:8190",
-      "port": 8190
+      "url": "http://localhost:8200",
+      "port": 8200
     }
   ]
 }

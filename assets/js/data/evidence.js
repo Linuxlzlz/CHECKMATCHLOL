@@ -204,6 +204,70 @@ export const EVIDENCE = {
   bandaGrande: { p: 0.494, n: 1256, low: 0.467, high: 0.522, afirmacionOriginal: 0.74 },
 
   /**
+   * ¿Y si el teamfight decide cuando los equipos están parejos?
+   *
+   * Es la objeción más razonable al hallazgo de arriba, y la más difícil de
+   * cerrar: el índice podría no predecir EN PROMEDIO y aun así ser decisivo en
+   * el subgrupo donde la fuerza de equipo no separa. El backtest original ya
+   * decía que una ventaja *condicional* es lo único que puede sobrevivir en un
+   * juego adversarial, así que la hipótesis tiene fundamento teórico.
+   *
+   * Se probó con SEIS definiciones distintas de "parejo", porque la definición
+   * importa y cambiarla a mano hasta que dé es la forma más fácil de engañarse.
+   * Corpus: 2115 mapas con draft de las 6 ligas desde enero de 2026.
+   *
+   * Seguir a la mejor comp de teamfight (>=1 punto crudo de ventaja):
+   *
+   *   definición de "parejo"              teamfight        lado azul
+   *   Elo similar (|logOdds|<0.15)        43% [33,54]  n=86      —
+   *   récord de temporada (dif<8%)        50% [45,55]  n=377   56% [51,61]
+   *   forma 10 MAPAS idéntica             46% [40,52]  n=239   53% [46,59]
+   *   forma 10 MAPAS ±10%                 48% [44,53]  n=556   51% [47,56]
+   *   forma 10 SERIES idéntica            43% [36,51]  n=150   62% [54,69]
+   *   forma 10 SERIES ±10%                51% [46,56]  n=392   60% [55,65]
+   *
+   * Ninguna pasa del 50%, y en todas el LADO AZUL predice más que la comp. Ese
+   * es el resultado que cierra la discusión: en el escenario donde el draft
+   * debería mandar, saber quién arranca en azul informa más que saber quién
+   * drafteó mejor teamfight.
+   *
+   * Por magnitud, dentro de forma pareja: 50-53% desde 1 hasta 6 puntos crudos
+   * de ventaja, y 52% [46,58] en la banda grande. No hay umbral donde despegue.
+   *
+   * También se probó una hipótesis generada a partir de un caso concreto
+   * (NAVI-VIT del 21/08, donde el eje acertó los 3 mapas y cambió de lado en el
+   * segundo): que el índice acierte cuando CAMBIA de lado entre mapas de una
+   * misma serie, que sería señal de que lee el ajuste de draft.
+   *
+   *   el eje cambia de lado en la serie   47% [42,51]  n=471
+   *   el eje se mantiene                  49% [44,53]  n=480
+   *
+   * Tampoco. Esa serie fue suerte: 3 de 3 sale una vez de cada ocho.
+   *
+   * NO se cierra el tema por decreto: las cuatro reglas candidatas del registro
+   * incluyen "teamfight solo con récord parejo", congelada antes de cada
+   * resultado. Si en vivo se comporta distinto de estas seis mediciones, el
+   * registro lo va a mostrar.
+   */
+  teamfightCondicional: {
+    medidoEl: '2026-08-22',
+    mapas: 2115,
+    especificaciones: [
+      { def: 'Elo similar (|logOdds|<0.15)', p: 0.43, n: 86 },
+      { def: 'récord de temporada dif<8%', p: 0.50, n: 377, lado: 0.56 },
+      { def: 'forma 10 mapas idéntica', p: 0.46, n: 239, lado: 0.53 },
+      { def: 'forma 10 mapas ±10%', p: 0.48, n: 556, lado: 0.51 },
+      { def: 'forma 10 series idéntica', p: 0.43, n: 150, lado: 0.62 },
+      { def: 'forma 10 series ±10%', p: 0.51, n: 392, lado: 0.60 },
+    ],
+    porMagnitudConFormaPareja: { '1pt': 0.51, '3pts': 0.52, '5pts': 0.53, bandaGrande: 0.52 },
+    cambiaDeLadoEnLaSerie: { p: 0.47, n: 471, low: 0.42, high: 0.51 },
+    seMantiene: { p: 0.49, n: 480, low: 0.44, high: 0.53 },
+    conclusion: 'ninguna definición de "parejo" lo despega del 50%; el lado azul predice más',
+    abierto: 'registrado como regla candidata para test prospectivo',
+  },
+
+  /**
    * El test que define si el eje de escalado mide lo que dice medir: tendría que
    * acertar MÁS en partidas largas que en cortas.
    *
