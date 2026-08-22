@@ -6,11 +6,18 @@ name: wire
 
 on:
   schedule:
-    # Se pide cada 5 minutos sabiendo que GitHub NO lo va a cumplir: medido sobre
-    # 59 intervalos reales, ninguno bajó de 10 min, la mediana fue 35 y el máximo
-    # 107. Lo que garantiza la cobertura no es este cron sino WIRE_WATCH_MINUTES,
-    # que hace que cada corrida sondee por dentro durante 25 minutos.
-    - cron: '*/5 * * * *'
+    # Cada 30 minutos, NO cada 5.
+    #
+    # Con la vigilancia continua cada corrida dura ~20 min, así que pedir una
+    # cada 5 apilaba corridas: medido sobre 39, se solaparon 18 —hasta 21 min en
+    # paralelo— y 11 terminaron en fallo. Dos corridas a la vez leen el mismo
+    # `notified`, las dos creen que el aviso está pendiente y las dos lo mandan.
+    # Ese era el origen de los avisos repetidos en Discord.
+    #
+    # La cobertura no la da el cron sino WIRE_WATCH_MINUTES, que sondea por
+    # dentro. 30 de intervalo contra 20 de ventana deja aire para que una
+    # termine y guarde antes de que arranque la siguiente.
+    - cron: '*/30 * * * *'
   workflow_dispatch:        # para correrlo a mano desde la pestaña Actions
 
 concurrency:
@@ -26,7 +33,7 @@ jobs:
   wire:
     runs-on: ubuntu-latest
     # La corrida vigila 25 min por dentro; el margen cubre instalación y publicación.
-    timeout-minutes: 35
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +48,7 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Generar y publicar
+        continue-on-error: true   # aunque falle, hay que guardar lo ya avisado
         env:
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
@@ -49,7 +57,7 @@ jobs:
           WIRE_LIVE: ${{ vars.WIRE_LIVE }}
           # Vigilancia continua dentro de la corrida. Ver el comentario en wire-bot.mjs:
           # el cron de Actions no cumple su frecuencia y esto es lo que la reemplaza.
-          WIRE_WATCH_MINUTES: ${{ vars.WIRE_WATCH_MINUTES || '25' }}
+          WIRE_WATCH_MINUTES: ${{ vars.WIRE_WATCH_MINUTES || '20' }}
           WIRE_POLL_SECONDS: ${{ vars.WIRE_POLL_SECONDS || '90' }}
           WIRE_VERIFY: ${{ vars.WIRE_VERIFY }}
           WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
@@ -82,20 +90,38 @@ jobs:
         run: node tools/wire-bot.mjs
 
       - name: Guardar el estado de la cola y el corpus de Elo
+        if: always()   # aunque el bot falle, lo ya avisado tiene que quedar registrado
         run: |
-          # El corpus de Elo también se guarda: si no sobrevive a la corrida, cada
-          # ejecución volvería a construirlo desde cero y el bot no tendría
-          # historia con la que medir fuerza de equipo.
+          # Si esto no guarda, la corrida siguiente vuelve a mandar lo mismo:
+          # perder el registro de "ya avisado" es exactamente el bug de los
+          # avisos repetidos en Discord.
+          set -u
           ARCHIVOS="tools/wire-state.json tools/elo-corpus.json"
-          if [ -n "$(git status --porcelain $ARCHIVOS)" ]; then
-            git config user.name  "checkmatch-wire"
-            git config user.email "wire@users.noreply.github.com"
-            git add $ARCHIVOS
-            git commit -m "wire: estado de la cola [skip ci]"
-            # Otra corrida pudo haber empujado mientras esta trabajaba: se rebasa
-            # sobre lo suyo en vez de fallar y perder lo de esta.
-            git pull --rebase --autostash || true
-            git push
-          else
-            echo "sin cambios en el estado"
+          if [ -z "$(git status --porcelain $ARCHIVOS)" ]; then
+            echo "sin cambios en el estado"; exit 0
           fi
+          git config user.name  "checkmatch-wire"
+          git config user.email "wire@users.noreply.github.com"
+
+          for intento in 1 2 3 4 5; do
+            git add $ARCHIVOS
+            if git diff --cached --quiet; then echo "nada que commitear"; exit 0; fi
+            git commit -m "wire: estado de la cola [skip ci]"
+            if git push; then
+              echo "estado guardado (intento $intento)"; exit 0
+            fi
+
+            echo "push rechazado: otra corrida empujó primero. Uniendo en vez de descartar."
+            git fetch origin main
+            git show origin/main:tools/wire-state.json > /tmp/remoto-wire.json 2>/dev/null || echo '{}' > /tmp/remoto-wire.json
+            # Unir NUESTRO estado con el del remoto. Lo de los dos sobrevive.
+            node tools/merge-state.mjs /tmp/remoto-wire.json tools/wire-state.json
+            cp tools/wire-state.json /tmp/unido-wire.json
+            cp tools/elo-corpus.json /tmp/unido-corpus.json
+            # Alinearse con el remoto y volver a poner lo unido encima.
+            git reset --hard origin/main
+            cp /tmp/unido-wire.json tools/wire-state.json
+            cp /tmp/unido-corpus.json tools/elo-corpus.json
+          done
+          echo "no se pudo guardar el estado tras 5 intentos" >&2
+          exit 1
