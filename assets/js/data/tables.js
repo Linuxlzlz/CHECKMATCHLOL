@@ -191,10 +191,35 @@ Vladimir,1,3,0,1,1,1,3`;
  * O sea: la extensión mejora la lectura del draft de hoy sin tocar la vara
  * contra la que se lo mide. La asimetría es deliberada y está declarada.
  *
- * Los que siguen sin fila (Locke, Yunara, Zaahen) son campeones cuyo kit no
- * conozco lo suficiente como para puntuarlo. Inventarles números sería peor que
- * dejarlos afuera: el sitio los muestra en el panel de diagnóstico con un editor
- * para que los puntúes vos, y esa clasificación queda guardada como "manual".
+ * CIERRE DE LA BRECHA (22/08/2026). Ya no queda ningún campeón sin fila: los
+ * 173 de Data Dragon 16.16.1 están clasificados entre la tabla congelada y esta.
+ *
+ * Los tres últimos —Locke, Yunara y Zaahen— se puntuaron leyendo su kit real
+ * desde Data Dragon (rango, resistencias, y la descripción de pasiva y las
+ * cuatro habilidades), no de memoria, y anclando cada uno contra filas
+ * comparables que ya existían. El razonamiento queda escrito acá para que se
+ * pueda discutir la fila y no solo el número:
+ *
+ *   Locke (Asesino/Mago, cuerpo a cuerpo 125, 620 vida)
+ *     R lanza un artefacto a 1000 de rango que atrapa y EJECUTA, y gana poder
+ *     por atrapar campeones: eso es una herramienta de pick, no de teamfight.
+ *     E es teletransporte + deslizamiento, Q marca a 950. Ancla: Akali
+ *     (0,1,0,3,0,1,2), con +1 en inicio y en poke por el alcance de R y Q.
+ *
+ *   Yunara (Tirador, 575 de rango, escalado por crítico)
+ *     Q propaga los ataques a enemigos cercanos, W ralentiza a 1150, R mejora
+ *     las básicas. Sin CC duro y sin inicio: hipercarry de escalado.
+ *     Ancla: Twitch (0,1,0,1,0,0,3), con +1 en poke por el alcance de W.
+ *
+ *   Zaahen (Luchador/Asesino, cuerpo a cuerpo 175, 640 vida, revive con la pasiva)
+ *     W atrae enemigos a 850, Q recargado lanza por los aires, E es un
+ *     deslizamiento, R cura. Bruiser con inicio y sostén, no tanque puro.
+ *     Ancla: Sett (2,1,2,1,0,2,1) y Volibear (2,1,2,2,0,2,1), con aoe 2 por el
+ *     tirón en línea y el golpe de área.
+ *
+ * Esto es JUICIO, igual que el resto de la tabla, y sigue fuera del cálculo de
+ * la escala. Si una fila parece mal, se discute y se cambia acá — pero antes de
+ * ver un resultado, nunca después.
  */
 export const EXTENSION_CSV = `champion,fl,aoe,eng,pick,poke,split,scale
 Akshan,0,0,0,3,1,2,1
@@ -205,6 +230,7 @@ Fizz,0,1,0,3,0,1,2
 Heimerdinger,0,2,0,0,3,1,2
 Kayle,0,1,0,0,1,3,3
 Kayn,1,1,2,3,0,2,2
+Locke,0,1,1,3,1,1,2
 Master Yi,0,1,0,2,0,2,3
 Mel,0,3,0,2,2,0,2
 Nasus,2,1,0,1,0,3,3
@@ -216,7 +242,9 @@ Tahm Kench,3,0,1,2,0,1,1
 Talon,0,1,0,3,0,2,1
 Teemo,0,1,0,1,2,2,1
 Udyr,2,2,2,1,0,2,2
-Vel'Koz,0,3,0,1,3,0,2`;
+Vel'Koz,0,3,0,1,3,0,2
+Yunara,0,1,0,1,1,0,3
+Zaahen,2,2,2,2,0,2,1`;
 
 export const REFERENCE_CSV = `gameid,side,team,result,champions
 80183,Blue,EDG,0,Lee Sin|Cassiopeia|Ziggs|Gnar|Camille
