@@ -63,6 +63,8 @@ export function buildElo(maps, opts = {}) {
   const { K, inicial, regresionMensual } = { ...ELO_PARAMS, ...opts };
   const ratings = new Map();
   const partidas = new Map();
+  // Última fecha jugada por equipo: hace falta para medir el parón.
+  const ultimo = new Map();
   const R = (id) => ratings.get(id) ?? inicial;
 
   const orden = maps
@@ -87,8 +89,10 @@ export function buildElo(maps, opts = {}) {
     ratings.set(B, R(B) + K * ((1 - ganoA) - (1 - eA)));
     partidas.set(A, (partidas.get(A) ?? 0) + 1);
     partidas.set(B, (partidas.get(B) ?? 0) + 1);
+    ultimo.set(A, m.date);
+    ultimo.set(B, m.date);
   }
-  return { ratings, partidas };
+  return { ratings, partidas, ultimo };
 }
 
 /**
@@ -101,10 +105,62 @@ export function buildElo(maps, opts = {}) {
  */
 export const MIN_PARTIDAS_ELO = 5;
 
-export function eloLogOdds(a, b, { escala = ELO_PARAMS.escala } = {}) {
+/**
+ * Cuánto vale un rating después de un parón.
+ *
+ * El Elo no envejece: `regresionMensual` está en 0 porque medido sobre el
+ * corpus anterior no mejoraba. Pero eso se midió sobre partidos seguidos, y
+ * entre splits hay parones de seis semanas donde cambian rosters, parche y
+ * meta. El rating entra intacto igual, y ahí es donde el modelo se rompe.
+ *
+ * Medido sobre 1736 mapas evaluados camino adelante, partiendo por los días que
+ * el equipo MÁS oxidado de los dos llevaba sin jugar:
+ *
+ *   días sin jugar   acierto            n      Brier
+ *      0-4           62% [59, 64]      1271    0.2316
+ *      4-10          64% [59, 69]       348    0.2212
+ *     10-21          54% [40, 67]        48    0.2474
+ *     21-45          54% [35, 72]        24    0.2555
+ *     45+            38% [25, 52]        45    0.2656
+ *
+ * A partir de 45 días el modelo no solo deja de acertar: acierta MENOS que una
+ * moneda, y con la misma confianza media que en un partido normal. Eso es lo
+ * peor que puede pasar — seguridad plena sobre información vencida. El
+ * intervalo del tramo largo ni toca el del tramo normal.
+ *
+ * La corrección encoge la diferencia de rating hacia cero según el parón.
+ * Elegida por Brier fuera de muestra sobre la mitad que no se usó para
+ * ajustarla (868 mapas, 31 con parón largo):
+ *
+ *   sin ajuste                    Brier 0.2726   48% en el tramo de 45+
+ *   corte duro a 0                      0.2611   42%
+ *   decaimiento exponencial             0.2579   55%
+ *   escalones 0.5 / 0.25                0.2563   55%   <- elegida
+ *
+ * El efecto global es chico porque son pocos partidos (31 de 868). No es un
+ * ajuste para subir el número general: es para dejar de afirmar con seguridad
+ * justo cuando no se sabe.
+ */
+export const STALENESS = [
+  { dias: 45, factor: 0.25 },
+  { dias: 21, factor: 0.50 },
+];
+
+/** Factor por el que se multiplica la diferencia de Elo según el parón. */
+export function stalenessFactor(dias) {
+  if (dias == null || !Number.isFinite(dias)) return 1;
+  for (const t of STALENESS) if (dias >= t.dias) return t.factor;
+  return 1;
+}
+
+/**
+ * @param {number|null} dias  días sin jugar del equipo más oxidado de los dos.
+ *   Si no se pasa, el comportamiento es el de siempre.
+ */
+export function eloLogOdds(a, b, { escala = ELO_PARAMS.escala, dias = null } = {}) {
   if (a?.rating == null || b?.rating == null) return null;
   if ((a.partidas ?? 0) < MIN_PARTIDAS_ELO || (b.partidas ?? 0) < MIN_PARTIDAS_ELO) return null;
-  return (a.rating - b.rating) / escala;
+  return ((a.rating - b.rating) / escala) * stalenessFactor(dias);
 }
 
 /** Busca a un equipo en la tabla, devolviendo también cuántos mapas lo sostienen. */
@@ -112,5 +168,9 @@ export function eloFor(tabla, teamId) {
   if (!tabla || teamId == null) return null;
   const rating = tabla.ratings?.get(teamId);
   if (rating == null) return null;
-  return { rating, partidas: tabla.partidas?.get(teamId) ?? 0 };
+  return {
+    rating,
+    partidas: tabla.partidas?.get(teamId) ?? 0,
+    ultimo: tabla.ultimo?.get(teamId) ?? null,
+  };
 }

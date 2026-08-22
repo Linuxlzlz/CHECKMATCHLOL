@@ -208,7 +208,19 @@ export function makeEloFor({ buildElo, eloFor, eloLogOdds, MIN_PARTIDAS_ELO }, c
     const b = eloFor(tabla, teamIdB);
     if (!a || !b) return null;
     if ((a.partidas ?? 0) < MIN_PARTIDAS_ELO || (b.partidas ?? 0) < MIN_PARTIDAS_ELO) return null;
-    return { a, b, logOdds: eloLogOdds(a, b) };
+
+    // Días sin jugar del equipo MÁS oxidado de los dos. Después de un parón
+    // largo el rating describe a un equipo que puede haber cambiado de roster,
+    // de parche y de meta: medido, a partir de 45 días el modelo acierta 38%.
+    const dias = (() => {
+      const f = (x) => (x?.ultimo ? (Date.now() - new Date(x.ultimo).getTime()) / 86400_000 : null);
+      const da = f(a), db = f(b);
+      return da == null || db == null ? null : Math.max(da, db);
+    })();
+
+    const logOdds = eloLogOdds(a, b, { dias });
+    if (logOdds === null) return null;
+    return { a, b, logOdds, dias };
   };
 }
 

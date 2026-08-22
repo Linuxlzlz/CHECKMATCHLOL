@@ -268,7 +268,11 @@ export function buildProbability({
       label: 'Fuerza de equipo (Elo)',
       detail:
         `${Math.round(elo.a?.rating ?? 0)} contra ${Math.round(elo.b?.rating ?? 0)} · ` +
-        `${elo.a?.partidas ?? 0} y ${elo.b?.partidas ?? 0} mapas`,
+        `${elo.a?.partidas ?? 0} y ${elo.b?.partidas ?? 0} mapas` +
+        (elo.dias != null && elo.dias >= 21
+          ? ` · ${Math.round(elo.dias)} días sin jugar, aporte reducido`
+          : ''),
+      weak: elo.dias != null && elo.dias >= 21,
       contrib: eloDelta,
       note:
         'Medido POR MAPA, que es lo que este número predice: fuera de muestra sobre 570 mapas da ' +
