@@ -24,7 +24,29 @@ const sigmoid = (x) => 1 / (1 + Math.exp(-x));
  */
 export const WEIGHTS = {
   teamQuality: 3.5,   // sobre (winrate_a - winrate_b) YA SUAVIZADO, ver PRIOR
-  draft: 0.30,        // por sd de Δ teamfight, solo si |Δ| > 0.5
+  /**
+   * Peso del draft por sd de Δ teamfight. Medido, ya no supuesto.
+   *
+   * Este número era 0.30 y venía del juicio inicial: nunca se había ajustado
+   * contra datos. El 26/08 se midió el aporte incremental sobre 1593 mapas,
+   * camino adelante, ajustando el peso en la primera mitad cronológica y
+   * evaluando en la segunda. El peso que eligen los datos:
+   *
+   *   todos los mapas          -0.013
+   *   récord muy parejo (<8)   +0.022
+   *   récord parejo (<15)      -0.039
+   *   récord desparejo (>=15)  +0.023
+   *   récord muy desparejo     +0.063
+   *
+   * Ninguno se acerca a 0.30. Se toma 0.02, que es el orden de magnitud de los
+   * tramos donde sale positivo. En la práctica mueve menos de un punto de
+   * probabilidad, que es exactamente lo que la evidencia sostiene: las mejoras
+   * de Brier medidas van de 0.0005 a 0.0010 con n≈200, o sea ruido.
+   *
+   * Sube solo si una medición futura lo justifica. Bajarlo a mano después de
+   * ver un resultado sería el error que este proyecto documenta.
+   */
+  draft: 0.02,
   corpusTeam: 2.2,    // sobre la diferencia de winrate medida en el corpus
 };
 
@@ -206,10 +228,48 @@ export function draftWeightFrom(validation) {
  * probabilidad en los pocos mapas donde aplica, y se apaga solo.
  */
 export const TF_CONDICIONAL = {
-  // Diferencia máxima de winrate para considerar dos récords "parejos".
-  umbralRecord: 0.15,
+  /**
+   * Diferencia máxima de winrate para considerar dos récords "parejos".
+   *
+   * Se cerró de 0.15 a 0.08 por medición: en la banda ancha (<15 puntos) el
+   * peso que el ajuste elige es NEGATIVO (−0.039), o sea que ahí el eje resta.
+   * Solo en la banda estrecha (<8 puntos) sale positivo.
+   */
+  umbralRecord: 0.08,
   // El eje tiene que ser narrable: por debajo de 1 punto crudo es ruido.
   minRawDelta: 1,
+  /**
+   * Peso por sd de Δ teamfight. NO es el 0.30 por defecto del proyecto.
+   *
+   * Test de aporte incremental sobre 1593 mapas (1028 con ventaja de
+   * teamfight), camino adelante, ajustando el peso DENTRO de cada tramo en la
+   * primera mitad cronológica y evaluando en la segunda:
+   *
+   *   tramo                      peso ajustado   Brier sin -> con
+   *   todos                          -0.013      0.2329 -> 0.2333
+   *   récord muy parejo (<8 pts)     +0.022      0.2489 -> 0.2484
+   *   récord parejo (<15 pts)        -0.039      0.2482 -> 0.2498
+   *   récord desparejo (>=15 pts)    +0.023      0.2071 -> 0.2065
+   *   récord muy desparejo (>=25)    +0.063      0.1604 -> 0.1594
+   *
+   * Dos lecturas incómodas para la hipótesis, y las dos hay que decirlas:
+   *
+   *   1. El peso que sostienen los datos es 0.022, no 0.30. Poner 0.30 era
+   *      catorce veces más de lo medido.
+   *   2. El aporte NO se concentra donde el récord está parejo: el peso más
+   *      alto aparece en el tramo MUY DESPAREJO (+0.063). Es lo contrario de
+   *      lo que predice la hipótesis condicional.
+   *
+   * Y la advertencia que ordena todo lo anterior: las mejoras van de 0.0005 a
+   * 0.0010 de Brier con n≈200 por tramo. Eso es ruido. El componente queda
+   * encendido con su valor medido, que en la práctica mueve medio punto de
+   * probabilidad, en vez de apagado o inflado.
+   *
+   * Nota de contexto que sí es sólida: el Brier base por tramo es 0.2482 con
+   * récord parejo y 0.1604 con muy desparejo. El modelo está prácticamente
+   * ciego cuando los equipos son parejos — y el draft no lo arregla.
+   */
+  weight: 0.02,
   activo: true,
 };
 
@@ -227,14 +287,15 @@ export function draftWeightConditional({ tfRaw = null, wrA = null, wrB = null } 
   if (!parejo || !narrable) return base;
 
   return {
-    weight: WEIGHTS.draft,
-    measured: false,
+    weight: TF_CONDICIONAL.weight,
+    measured: true,
     conditional: true,
     reason:
       `Récords parejos (${(wrA * 100).toFixed(0)}% contra ${(wrB * 100).toFixed(0)}%) y ventaja de ` +
-      `teamfight narrable: el draft entra con peso ${WEIGHTS.draft.toFixed(2)}. Es una hipótesis EN ` +
-      `PRUEBA, no una medición: retrospectivamente este tramo da 50% sobre 377 mapas y en vivo 83% ` +
-      `sobre 6. Se puntúa aparte en el registro y se apaga solo si el corpus la desmiente.`,
+      `teamfight narrable: el draft entra con peso ${TF_CONDICIONAL.weight.toFixed(2)}, que es el que ` +
+      `sale de ajustarlo sobre 1593 mapas dentro de este mismo tramo. Mueve menos de un punto de ` +
+      `probabilidad a propósito: la mejora medida es 0.0005 de Brier, que con n≈200 es ruido. Se ` +
+      `puntúa aparte en el registro y se apaga solo si el corpus lo desmiente.`,
   };
 }
 

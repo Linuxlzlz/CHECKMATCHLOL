@@ -249,6 +249,39 @@ export const EVIDENCE = {
    * resultado. Si en vivo se comporta distinto de estas seis mediciones, el
    * registro lo va a mostrar.
    */
+
+  /**
+   * Aporte INCREMENTAL del teamfight, que es el test que faltaba.
+   *
+   * Las mediciones anteriores preguntaban "¿acierta el eje?". Esta pregunta
+   * otra cosa: "¿agrega información que la fuerza de equipo no tenía ya?". Con
+   * récord desparejo el eje puede verse bien solo porque el mejor equipo
+   * también draftea mejor, y eso el acierto marginal no lo distingue.
+   *
+   * Diseño: camino adelante sobre 1593 mapas (1028 con ventaja de teamfight).
+   * Base = tasa de lado + Elo. Se parte por paridad de récord y, DENTRO de cada
+   * tramo, se ajusta el peso del eje en la primera mitad cronológica y se
+   * evalúa en la segunda.
+   */
+  teamfightIncremental: {
+    medidoEl: '2026-08-26',
+    mapas: 1593,
+    conVentaja: 1028,
+    tramos: [
+      { tramo: 'todos',                 peso: -0.013, brierSin: 0.2329, brierCon: 0.2333, n: 514 },
+      { tramo: 'récord muy parejo <8',  peso:  0.022, brierSin: 0.2489, brierCon: 0.2484, n: 185 },
+      { tramo: 'récord parejo <15',     peso: -0.039, brierSin: 0.2482, brierCon: 0.2498, n: 294 },
+      { tramo: 'desparejo >=15',        peso:  0.023, brierSin: 0.2071, brierCon: 0.2065, n: 220 },
+      { tramo: 'muy desparejo >=25',    peso:  0.063, brierSin: 0.1604, brierCon: 0.1594, n: 114 },
+    ],
+    pesoAplicado: 0.02,
+    conclusiones: [
+      'El peso que sostienen los datos es 0.022, no el 0.30 por defecto: catorce veces menos.',
+      'El aporte NO se concentra con récord parejo — el peso más alto sale en el tramo MUY desparejo (+0.063), al revés de lo que predice la hipótesis condicional.',
+      'Las mejoras van de 0.0005 a 0.0010 de Brier con n≈200 por tramo: es ruido.',
+      'Dato sólido de contexto: el Brier base es 0.2482 con récord parejo y 0.1604 con muy desparejo. El modelo está casi ciego cuando los equipos son parejos, y el draft no lo arregla.',
+    ],
+  },
   teamfightCondicional: {
     medidoEl: '2026-08-22',
     mapas: 2115,
