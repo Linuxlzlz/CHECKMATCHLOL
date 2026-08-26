@@ -263,6 +263,36 @@ export const EVIDENCE = {
    * tramo, se ajusta el peso del eje en la primera mitad cronológica y se
    * evalúa en la segunda.
    */
+
+  /**
+   * Inercia de serie y racha reciente, medidas como aporte incremental.
+   *
+   * Salieron de un caso concreto: en BRO vs KT del 26/08 el modelo dijo lo
+   * mismo cinco veces (65/54/54/65/65) después de que KT ganara el mapa 1 por
+   * 24-11 y 15.713 de oro. Se veía terco.
+   *
+   * Mismo diseño que el test del draft: 1606 mapas, 717 dentro de serie, camino
+   * adelante, peso ajustado en la primera mitad cronológica y evaluado en la
+   * segunda.
+   */
+  inerciaYRacha: {
+    medidoEl: '2026-08-26',
+    mapas: 1606,
+    dentroDeSerie: 717,
+    señales: [
+      { señal: 'inercia de serie', peso: 0.14, brierSin: 0.2292, brierCon: 0.2290,
+        aciertoSin: '222/359', aciertoCon: '222/359', aporta: 'no, +0.0002 es ruido' },
+      { señal: 'racha de últimos 5', peso: 0.305, brierSin: 0.2314, brierCon: 0.2338,
+        aciertoSin: '370/600', aciertoCon: '366/600', aporta: 'NO, empeora' },
+      { señal: 'racha dentro de serie', peso: 0.253, brierSin: 0.2292, brierCon: 0.2298,
+        aporta: 'NO, empeora' },
+    ],
+    decision: [
+      'Inercia: se implementa con su peso medido (0.14) pero NO por precisión — no mueve el acierto ni un mapa. Está para que el modelo responda a lo que acaba de pasar en la serie en vez de repetir el mismo número.',
+      'Racha: queda AFUERA. Empeora el Brier y el acierto.',
+      'Aviso honesto: sobre la propia serie BRO vs KT que motivó esto, la inercia habría dado 1/5 en vez de 2/5 — da vuelta el mapa 2 hacia KT y lo ganó BRO. Se implementa igual porque 717 mapas pesan más que una serie, que es el mismo criterio que se usó para no subir el peso del draft.',
+    ],
+  },
   teamfightIncremental: {
     medidoEl: '2026-08-26',
     mapas: 1593,

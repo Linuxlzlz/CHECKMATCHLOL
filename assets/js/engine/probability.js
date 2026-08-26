@@ -227,6 +227,37 @@ export function draftWeightFrom(validation) {
  * Si esto resulta ser ruido, el costo es acotado: mueve ~7 puntos de
  * probabilidad en los pocos mapas donde aplica, y se apaga solo.
  */
+
+/**
+ * Inercia de serie: ¿ganó el mapa anterior de ESTA serie?
+ *
+ * Entra por un caso concreto. En BRO vs KT del 26/08 el modelo dijo lo mismo
+ * las cinco veces —BRO 65%, 54%, 54%, 65%, 65%— después de que KT ganara el
+ * mapa 1 por 24-11 y 15.713 de oro. El modelo no aprendía nada dentro de la
+ * serie, y eso se lee como terquedad.
+ *
+ * Medido antes de implementarlo, sobre 1606 mapas y 717 dentro de serie,
+ * camino adelante y con corte cronológico (358 de ajuste, 359 de prueba):
+ *
+ *   peso ajustado   0.14
+ *   Brier           0.2292 -> 0.2290   (+0.0002)
+ *   acierto         222/359 -> 222/359 (idéntico)
+ *
+ * O sea: NO mejora la predicción. La mejora de 0.0002 con n=359 es ruido y el
+ * acierto no se mueve ni un mapa. Se implementa igual, con el peso medido y no
+ * con uno elegido, por una razón que no es la precisión: que el modelo responda
+ * a lo que acaba de pasar en la misma serie. Con 0.14 mueve ~3.5 puntos de
+ * probabilidad — suficiente para que la tarjeta deje de repetirse idéntica,
+ * insuficiente para inventar una señal que no está.
+ *
+ * Coincide con lo que ya decía EVIDENCE.inerciaDeSerie: 56.9% de acierto crudo
+ * pero explicado por fuerza de equipo. El Elo ya lo tenía casi todo.
+ *
+ * La racha de los últimos 5 se midió igual y quedó AFUERA porque empeora:
+ * Brier 0.2314 -> 0.2338 y acierto 370/600 -> 366/600.
+ */
+export const INERCIA = { weight: 0.14 };
+
 export const TF_CONDICIONAL = {
   /**
    * Diferencia máxima de winrate para considerar dos récords "parejos".
@@ -350,7 +381,7 @@ export const CLAMP = {
  */
 export function buildProbability({
   recordA, recordB, tfDelta, goldDiff, goldTotal = null, minute, finished = false,
-  corpusTeam = null, draftWeight = null, sideRate = null, elo = null,
+  corpusTeam = null, draftWeight = null, sideRate = null, elo = null, inercia = 0,
 }) {
   const components = [];
   let x = logit(0.5); // 0
@@ -549,6 +580,28 @@ export function buildProbability({
       note:
         'Único componente que le gana a la línea base fuera de muestra (Brier 0.2281 contra 0.2400 ' +
         'en 124 mapas no vistos). Ver la tarjeta de validación.',
+    });
+  }
+
+  // 1c. Inercia de serie: quién ganó el mapa anterior de ESTA serie.
+  //
+  // No mejora la predicción —medido: +0.0002 de Brier y el mismo acierto sobre
+  // 359 mapas— pero hace que el modelo responda a lo que acaba de pasar en vez
+  // de repetir el mismo número mapa tras mapa. Peso medido, no elegido.
+  if (inercia) {
+    const contrib = INERCIA.weight * inercia;
+    x += contrib;
+    components.push({
+      id: 'inercia',
+      label: 'Inercia de serie',
+      detail: `Ganó el mapa anterior: ${inercia > 0 ? 'el lado azul' : 'el lado rojo'}`,
+      contrib,
+      weak: true,
+      note:
+        'Peso 0.14, ajustado sobre 717 mapas dentro de serie. Medido, no mejora el acierto ' +
+        '(222/359 con y sin él): está para que el modelo no repita el mismo número después de ' +
+        'que el rival gane un mapa por paliza, no porque agregue señal. El Elo ya captura casi ' +
+        'todo lo que la inercia contiene.',
     });
   }
 

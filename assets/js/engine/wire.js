@@ -16,14 +16,15 @@
  */
 
 import {
-  LEAGUES, getLive, getSchedule, getEventDetails, getWindow, getDetails, feedTimestamp, secure,
-  getRosterIndex,
+  LEAGUES, getLive, getSchedule, getEventDetails, getWindow, getDetails, getFinalWindow,
+  feedTimestamp, secure, getRosterIndex,
 } from '../api.js';
 import { scoreDraft } from './index-score.js';
 import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
 import { buildProbability, draftWeightConditional } from './probability.js';
+import { finalStateOf, guessWinner } from './outcome.js';
 import {
   preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
   MVP_CRITERIA,
@@ -165,11 +166,16 @@ async function teamForm(leagueId, teamCodes, matchId = null) {
     const r = porEquipo.get(code);
     const of = delPartido?.[code];
     if (!r && !of) return null;
-    // Récord: el oficial de la liga si está; si no, el contado del calendario.
-    // La racha siempre sale del calendario, que es lo único que la tiene.
+    // El récord oficial de la liga se usa solo si tiene partidos adentro.
+    //
+    // En playoffs el bracket arranca en 0-0 y `??` no caía al alternativo,
+    // porque 0 no es null: el componente de calidad de equipos quedaba en cero
+    // justo en las series que más importan. Medido sobre la cola: 12 de 29
+    // predicciones (41%) salieron sin récord por esto.
+    const oficialSirve = of && (of.wins ?? 0) + (of.losses ?? 0) > 0;
     return {
-      wins: of?.wins ?? r.wins,
-      losses: of?.losses ?? r.losses,
+      wins: oficialSirve ? of.wins : (r?.wins ?? 0),
+      losses: oficialSirve ? of.losses : (r?.losses ?? 0),
       last: (r?.last ?? []).slice(-5),
     };
   });
@@ -328,6 +334,36 @@ export async function tick({
         const [formA, formB] = await teamForm(
           league.id, [sides.a.team, sides.b.team], ev.match?.id ?? ev.id ?? null
         );
+      // Inercia: quién ganó el mapa ANTERIOR de esta misma serie.
+      //
+      // Es lo que faltaba en BRO vs KT, donde el modelo repitió el mismo número
+      // cinco veces después de que KT ganara el mapa 1 por 15.713 de oro.
+      let inercia = 0;
+      if ((game.number ?? 1) > 1) {
+        const previo = (ev.match.games ?? [])
+          .filter((g) => g.state === 'completed' && (g.number ?? 0) < game.number)
+          .sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
+          .at(-1);
+        if (previo) {
+          try {
+            const wPrev = await getFinalWindow(previo.id);
+            const meta = wPrev?.gameMetadata;
+            if (meta) {
+              // Los lados se invierten entre mapas: el ganador se resuelve como
+              // teamId, nunca como "azul" o "rojo".
+              const ganador = guessWinner({
+                final: finalStateOf(wPrev),
+                blueTeamId: meta.blueTeamMetadata?.esportsTeamId ?? null,
+                redTeamId: meta.redTeamMetadata?.esportsTeamId ?? null,
+              });
+              if (ganador === sides.a.teamId) inercia = 1;
+              else if (ganador === sides.b.teamId) inercia = -1;
+            }
+          } catch { /* sin el mapa anterior, el componente simplemente no entra */ }
+        }
+      }
+
+
         const rec = recordFor ? recordFor(sides.a.teamId, sides.b.teamId) : null;
         // Fuerza de equipo medida contra quién jugó cada uno. Cuando está, el
         // récord no entra: buildProbability los trata como alternativas, no
@@ -343,6 +379,7 @@ export async function tick({
           // Tasa de lado medida en el corpus propio. Sin esto el bot caía al valor
           // congelado de EVIDENCE, igual que le pasaba al Elo.
           sideRate,
+          inercia,
           // El draft entra con peso solo si los récords están parejos y la
           // ventaja de teamfight es narrable. Fuera de esa condición manda la
           // medición general, que da cero.
