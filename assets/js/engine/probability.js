@@ -175,7 +175,109 @@ export function draftWeightFrom(validation) {
  * tramo donde predice 94% la realidad es 96%. Los valores nuevos son los que se
  * usaron en la validación fuera de muestra que dio Brier 0.1312.
  */
-export const CLAMP = { stateLogOdds: 4.0, pMin: 0.02, pMax: 0.98 };
+
+/**
+ * Peso CONDICIONAL del draft: teamfight cuando los récords están parejos.
+ *
+ * Entra por pedido explícito, y la evidencia está dividida — así que queda
+ * escrita completa para que se pueda revisar sin rehacer nada:
+ *
+ *   EN CONTRA (retrospectivo, 6 definiciones de "parejo", 2115 mapas):
+ *     récord de temporada dif<8%      50% [45,55]  n=377
+ *     forma 10 mapas idéntica         46% [40,52]  n=239
+ *     forma 10 series idéntica        43% [36,51]  n=150
+ *     ...ninguna pasa del 50%, y en todas el lado azul predice más.
+ *
+ *   A FAVOR (en vivo, agosto 2026):
+ *     récord parejo (<15 pts)         83%  n=6
+ *
+ *   EL CONTROL QUE PREOCUPA: en esa misma ventana en vivo, el teamfight con
+ *   récord DESPAREJO acertó 71% (n=7). Si el efecto fuera condicional, ese
+ *   tramo debería ser bajo. Que los dos estén altos es la firma de una racha
+ *   del eje en general, no de una ventaja que dependa de la paridad.
+ *
+ * Por eso el componente entra ACOTADO y con auto-corrección: usa el peso por
+ * defecto del proyecto (0.30 por sd, no un número inventado para la ocasión) y
+ * `revisarConCorpus()` lo devuelve a cero solo si un corpus indexado confirma
+ * que el tramo parejo no separa. La regla también sigue registrada en el
+ * ledger, así que se puntúa sola contra el lado azul y contra el modelo.
+ *
+ * Si esto resulta ser ruido, el costo es acotado: mueve ~7 puntos de
+ * probabilidad en los pocos mapas donde aplica, y se apaga solo.
+ */
+export const TF_CONDICIONAL = {
+  // Diferencia máxima de winrate para considerar dos récords "parejos".
+  umbralRecord: 0.15,
+  // El eje tiene que ser narrable: por debajo de 1 punto crudo es ruido.
+  minRawDelta: 1,
+  activo: true,
+};
+
+/**
+ * Devuelve el peso del draft para ESTE mapa. Fuera de la condición, manda la
+ * medición general (que hoy da cero).
+ */
+export function draftWeightConditional({ tfRaw = null, wrA = null, wrB = null } = {}) {
+  const base = draftWeightFromEvidence();
+  if (!TF_CONDICIONAL.activo) return base;
+  if (wrA == null || wrB == null || tfRaw == null) return base;
+
+  const parejo = Math.abs(wrA - wrB) < TF_CONDICIONAL.umbralRecord;
+  const narrable = Math.abs(tfRaw) >= TF_CONDICIONAL.minRawDelta;
+  if (!parejo || !narrable) return base;
+
+  return {
+    weight: WEIGHTS.draft,
+    measured: false,
+    conditional: true,
+    reason:
+      `Récords parejos (${(wrA * 100).toFixed(0)}% contra ${(wrB * 100).toFixed(0)}%) y ventaja de ` +
+      `teamfight narrable: el draft entra con peso ${WEIGHTS.draft.toFixed(2)}. Es una hipótesis EN ` +
+      `PRUEBA, no una medición: retrospectivamente este tramo da 50% sobre 377 mapas y en vivo 83% ` +
+      `sobre 6. Se puntúa aparte en el registro y se apaga solo si el corpus la desmiente.`,
+  };
+}
+
+/**
+ * Apaga el peso condicional si el corpus indexado dice que el tramo parejo no
+ * separa. Misma lógica que `draftWeightFrom`: la última medición manda.
+ */
+export function revisarConCorpus(validation) {
+  const par = validation?.byCondition?.recordParejo;
+  if (!par || par.n < 80) return { cambiado: false, motivo: `n=${par?.n ?? 0}: no alcanza para decidir` };
+  if (par.low <= 0.5 && par.high >= 0.5) {
+    TF_CONDICIONAL.activo = false;
+    return { cambiado: true, motivo: `El tramo parejo acierta ${(par.p * 100).toFixed(0)}% en ${par.n} mapas y el IC cruza el 50%: se apaga.` };
+  }
+  TF_CONDICIONAL.activo = true;
+  return { cambiado: false, motivo: `El tramo parejo acierta ${(par.p * 100).toFixed(0)}% en ${par.n} mapas sin cruzar el 50%: se mantiene.` };
+}
+
+export const CLAMP = {
+  stateLogOdds: 4.0,
+  pMin: 0.02,
+  pMax: 0.98,
+  /**
+   * Tope aparte para la probabilidad PREVIA (sin estado de partida).
+   *
+   * Medido en vivo del 23 al 25/08, por tramo de confianza declarada:
+   *
+   *   dice 52.8%  ->  acierta  0.0%   n=4
+   *   dice 56.8%  ->  acierta 62.5%   n=8
+   *   dice 63.2%  ->  acierta 66.7%   n=9
+   *   dice 71.7%  ->  acierta 55.6%   n=9   <- roto
+   *
+   * Los tramos medios están bien calibrados. El alto no: donde el modelo dice
+   * 72% acierta 56%, o sea sobreconfianza justo donde más afirma.
+   *
+   * No se ajusta una corrección fina sobre n=9, que sería sobreajustar. Se pone
+   * un techo: antes de que empiece la partida el modelo no puede declarar más
+   * de 75%, porque nunca demostró discriminar a ese nivel — su acierto medido
+   * es 63% (27/43). Con estado de partida el techo sigue siendo 98%, ahí el
+   * oro sí sostiene certezas altas.
+   */
+  preGameMax: 0.75,
+};
 
 /**
  * @param {object} input
@@ -467,7 +569,12 @@ export function buildProbability({
   }
 
   const rawP = sigmoid(x);
-  const p = Math.max(CLAMP.pMin, Math.min(CLAMP.pMax, rawP));
+  // Sin estado de partida el techo es más bajo: el modelo nunca demostró
+  // discriminar por encima del 75% antes de que empiece el mapa.
+  const previa = goldDiff === null || goldDiff === undefined || !minute;
+  const techo = previa ? CLAMP.preGameMax : CLAMP.pMax;
+  const piso = previa ? 1 - CLAMP.preGameMax : CLAMP.pMin;
+  const p = Math.max(piso, Math.min(techo, rawP));
   return {
     p,
     rawP,

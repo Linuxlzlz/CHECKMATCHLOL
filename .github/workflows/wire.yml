@@ -96,7 +96,7 @@ jobs:
           # perder el registro de "ya avisado" es exactamente el bug de los
           # avisos repetidos en Discord.
           set -u
-          ARCHIVOS="tools/wire-state.json tools/elo-corpus.json"
+          ARCHIVOS="tools/wire-state.json tools/elo-corpus.json tools/results-log.json"
           if [ -z "$(git status --porcelain $ARCHIVOS)" ]; then
             echo "sin cambios en el estado"; exit 0
           fi

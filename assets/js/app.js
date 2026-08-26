@@ -26,7 +26,9 @@ import {
   MATCHUP_CHECKLIST, ROLE_LABEL,
 } from './engine/structural.js';
 import { readState, liveSignals, gameMinute, snapshotLabel } from './engine/live.js';
-import { buildProbability, bettingStance, layerDisagreement, draftWeightFrom } from './engine/probability.js';
+import {
+  buildProbability, bettingStance, layerDisagreement, draftWeightFrom, draftWeightConditional,
+} from './engine/probability.js';
 import {
   evaluate as evaluateModels, readEvaluation, championScaling, championFighting,
 } from './engine/discovery.js';
@@ -925,7 +927,15 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     minute,
     finished: game?.state === 'completed',
     corpusTeam,
-    draftWeight: draftWeightFrom(validation),
+    // Con corpus indexado manda la validación del propio corpus. Sin corpus, el
+    // peso condicional: teamfight solo cuando los récords están parejos.
+    draftWeight: validation?.usable
+      ? draftWeightFrom(validation)
+      : draftWeightConditional({
+          tfRaw: score.perAxis.find((a) => a.axis === 'teamfight')?.dRaw ?? null,
+          wrA: recA && recA.wins + recA.losses > 0 ? recA.wins / (recA.wins + recA.losses) : null,
+          wrB: recB && recB.wins + recB.losses > 0 ? recB.wins / (recB.wins + recB.losses) : null,
+        }),
     // Si hay corpus propio, la ventaja de lado sale de ahí; si no, de la
     // medición congelada en data/evidence.js.
     sideRate: validation?.usable && validation.side?.n >= 100 ? validation.side.p : null,

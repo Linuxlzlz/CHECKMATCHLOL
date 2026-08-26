@@ -660,6 +660,16 @@ async function runOnce({ cycle = 0 } = {}) {
     );
   }
 
+
+  // Registrar en el histórico permanente ANTES de cualquier otra cosa: la cola
+  // se recorta a 60 y sin esto la muestra se pierde sola.
+  try {
+    const { registrar } = await import('./results-log.mjs');
+    const r = registrar(wire.queue());
+    if (r.added) console.log(`Histórico: +${r.added} mapas (${r.total} en total).`);
+  } catch (e) {
+    console.warn(`No se pudo registrar el histórico: ${e.message}`);
+  }
   const live = String(process.env.WIRE_LIVE ?? "").toLowerCase() === "true";
 
   // El tope es POR CORRIDA, no por sondeo.

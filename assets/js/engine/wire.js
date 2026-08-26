@@ -23,7 +23,7 @@ import { scoreDraft } from './index-score.js';
 import { structuralAxes, concentrationAndWindow } from './structural.js';
 import { readState, gameMinute } from './live.js';
 import { mergePlayers, roleGoldDiff, goldConcentration } from './checkpoints.js';
-import { buildProbability, draftWeightFromEvidence } from './probability.js';
+import { buildProbability, draftWeightConditional } from './probability.js';
 import {
   preMatchTweet, postMatchTweet, keyFactOf, mvpOf, axisCompare, keyMatchup, winConditions,
   MVP_CRITERIA,
@@ -247,6 +247,9 @@ async function resolveMatch(rawId) {
  *
  * @param {object} opts.standingsFor  (tournamentId) => standings, para la calidad de equipos
  */
+/** Winrate de un récord {wins,losses}; null si no hay historia. */
+const wr = (r) => (r && r.wins + r.losses > 0 ? r.wins / (r.wins + r.losses) : null);
+
 export async function tick({
   leagues = LEAGUES, recordFor = null, eloFor = null, sideRate = null, backfillHours = 0, matchIds = [], onlyKind = null,
   regenerate = false,
@@ -340,10 +343,14 @@ export async function tick({
           // Tasa de lado medida en el corpus propio. Sin esto el bot caía al valor
           // congelado de EVIDENCE, igual que le pasaba al Elo.
           sideRate,
-          // Mismo criterio que el sitio: si la medición dice que el índice no
-          // separa ganadores, el draft entra en cero. Antes el bot lo pesaba
-          // 0.30 mientras la propia tarjeta decía que no tiene respaldo.
-          draftWeight: draftWeightFromEvidence(),
+          // El draft entra con peso solo si los récords están parejos y la
+          // ventaja de teamfight es narrable. Fuera de esa condición manda la
+          // medición general, que da cero.
+          draftWeight: draftWeightConditional({
+            tfRaw: score.perAxis.find((a) => a.axis === 'teamfight')?.dRaw ?? null,
+            wrA: wr(rec?.a ?? formA ?? null),
+            wrB: wr(rec?.b ?? formB ?? null),
+          }),
         });
         const t = preMatchTweet({ league, ev, game, blue: sides.a, red: sides.b, score, prob, edges });
         if (push(preId, {
