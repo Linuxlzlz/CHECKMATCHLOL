@@ -85,6 +85,9 @@ jobs:
           # Ventana del corpus de Elo la primera vez que se construye. Después
           # cada corrida solo pide lo nuevo, así que esto casi no vuelve a pesar.
           WIRE_ELO_DAYS: ${{ vars.WIRE_ELO_DAYS || '150' }}
+          # Presupuesto de tiempo del corpus por corrida. Con 15 ligas la primera
+          # construcción es larga; las marcas de agua por liga la hacen reanudable.
+          WIRE_ELO_PRESUPUESTO_MIN: ${{ vars.WIRE_ELO_PRESUPUESTO_MIN || '8' }}
           WIRE_MATCH: ${{ vars.WIRE_MATCH }}
           WIRE_ONLY: ${{ vars.WIRE_ONLY }}
         run: node tools/wire-bot.mjs

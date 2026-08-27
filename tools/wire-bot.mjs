@@ -624,11 +624,15 @@ async function runOnce({ cycle = 0 } = {}) {
         { getSchedule: api.getSchedule, getEventDetails: api.getEventDetails,
           getFinalWindow: api.getFinalWindow, pool: api.pool,
           finalStateOf: outcome.finalStateOf, resolveSeries: outcome.resolveSeries },
-        { leagues, dias, log: (s) => console.log(s) }
+        { leagues, dias, log: (s) => console.log(s),
+          // Deja margen dentro de la ventana de vigilancia: con 15 ligas la
+          // primera construcción es larga y es reanudable entre corridas.
+          presupuestoMs: num(process.env.WIRE_ELO_PRESUPUESTO_MIN, 8) * 60_000 }
       );
       console.log(
         `Corpus de Elo: ${r.total} mapas (${r.added} nuevos` +
-        `${r.sinResolver ? `, ${r.sinResolver} sin ganador resoluble` : ''}).`
+        `${r.sinResolver ? `, ${r.sinResolver} sin ganador resoluble` : ''}` +
+        `${r.pendientes ? `, ${r.pendientes} liga(s) para la próxima corrida` : ''}).`
       );
       const corpus = loadCorpus();
       eloFor = makeEloFor(

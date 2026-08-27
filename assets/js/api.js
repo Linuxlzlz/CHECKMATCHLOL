@@ -16,6 +16,18 @@ const API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z';
 const GW = 'https://esports-api.lolesports.com/persisted/gw/';
 const FEED = 'https://feed.lolesports.com/livestats/v1/';
 
+/**
+ * Ligas cubiertas. El orden es el de las pestañas del sitio: primero las
+ * regionales por peso competitivo, después los internacionales.
+ *
+ * Los playoffs, play-ins y finales NO hacen falta configurarlos aparte: el
+ * calendario de cada liga ya los devuelve como bloques ("Playoffs", "Play-ins",
+ * "Final", "Eliminatorias"), así que entran solos.
+ *
+ * Los internacionales quedan configurados aunque hoy no tengan partidos: cuando
+ * arranquen, el bot los toma sin que haya que tocar nada. Un calendario vacío
+ * no cuesta: es una petición que devuelve cero eventos.
+ */
 export const LEAGUES = [
   { key: 'LCK', id: '98767991310872058', name: 'LCK', region: 'Corea' },
   { key: 'LCKC', id: '98767991335774713', name: 'LCK Challengers', region: 'Corea' },
@@ -23,6 +35,15 @@ export const LEAGUES = [
   { key: 'LEC', id: '98767991302996019', name: 'LEC', region: 'EMEA' },
   { key: 'LCS', id: '98767991299243165', name: 'LCS', region: 'Norteamérica' },
   { key: 'CBLOL', id: '98767991332355509', name: 'CBLOL', region: 'Brasil' },
+  { key: 'LCP', id: '113476371197627891', name: 'LCP', region: 'Pacífico' },
+  { key: 'PCS', id: '104366947889790212', name: 'PCS', region: 'Taiwán y Hong Kong' },
+  { key: 'LJL', id: '98767991349978712', name: 'LJL', region: 'Japón' },
+  { key: 'LRN', id: '110371976858004491', name: 'LRN', region: 'Latam Norte' },
+  { key: 'LRS', id: '110372322609949919', name: 'LRS', region: 'Latam Sur' },
+  { key: 'TCL', id: '98767991343597634', name: 'TCL', region: 'Turquía' },
+  { key: 'WORLDS', id: '98767975604431411', name: 'Mundial', region: 'Internacional' },
+  { key: 'MSI', id: '98767991325878492', name: 'MSI', region: 'Internacional' },
+  { key: 'FIRSTSTAND', id: '113464388705111224', name: 'First Stand', region: 'Internacional' },
 ];
 
 class HttpError extends Error {

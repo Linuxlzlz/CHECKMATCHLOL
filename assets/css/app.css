@@ -90,14 +90,20 @@ button { font: inherit; cursor: pointer; }
 }
 .league-btn {
   background: transparent; border: 1px solid transparent; color: var(--text-dim);
-  padding: 7px 14px; border-radius: 8px; white-space: nowrap;
-  font-size: 13px; font-weight: 600; transition: .15s;
+  padding: 6px 11px; border-radius: 8px; white-space: nowrap;
+  font-size: 12.5px; font-weight: 600; transition: .15s;
 }
 .league-btn:hover { color: var(--text); background: var(--bg-card); }
 .league-btn.active {
   color: #06101d; background: var(--accent); border-color: var(--accent);
 }
-.league-btn .reg { display: block; font-size: 10px; font-weight: 500; opacity: .7; }
+.league-btn .reg { display: block; font-size: 9.5px; font-weight: 500; opacity: .7; }
+
+/* Con 15 ligas la barra scrollea. Se marca el borde derecho para que se vea
+   que hay más y nadie se pierda media lista. */
+.leagues { scrollbar-width: thin; scroll-behavior: smooth; }
+.leagues::-webkit-scrollbar { height: 4px; }
+.leagues::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
 
 /* ---------- layout ---------- */
 

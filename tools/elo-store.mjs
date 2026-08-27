@@ -83,16 +83,29 @@ export function toEloMaps(corpus) {
  * @param {object} opts  { leagues, dias, log }
  * @returns {{added:number, leidas:number, sinResolver:number}}
  */
-export async function updateCorpus(deps, { leagues, dias = 150, log = () => {} } = {}) {
+export async function updateCorpus(deps, { leagues, dias = 150, log = () => {}, presupuestoMs = 8 * 60_000 } = {}) {
   const { getSchedule, getEventDetails, getFinalWindow, pool, finalStateOf, resolveSeries } = deps;
   const corpus = loadCorpus();
   const yaTengo = new Set(corpus.maps.map((m) => m.g));
 
+  // Presupuesto de tiempo por corrida.
+  //
+  // Con 15 ligas configuradas, la primera construcción son 150 días por liga y
+  // puede comerse la ventana entera de vigilancia. Las marcas de agua por liga
+  // hacen que esto sea reanudable: lo que no entra hoy se completa en la
+  // próxima corrida, y mientras tanto el bot sigue prediciendo con lo que ya
+  // tiene en vez de quedarse sin corpus.
+  const arranque = Date.now();
+  const sinTiempo = () => Date.now() - arranque > presupuestoMs;
+
   let added = 0;
   let leidas = 0;
   let sinResolver = 0;
+  let pendientes = 0;
 
   for (const league of leagues) {
+    // Si se acabó el tiempo, esta liga queda para la próxima: es reanudable.
+    if (sinTiempo()) { pendientes++; continue; }
     const key = league.key ?? league.id;
     // Primera vez: se mira `dias` hacia atrás. Después, solo desde lo último
     // leído menos el solape.
@@ -189,7 +202,10 @@ export async function updateCorpus(deps, { leagues, dias = 150, log = () => {} }
   }
 
   if (added || Object.keys(corpus.hasta).length) saveCorpus(corpus);
-  return { added, leidas, sinResolver, total: corpus.maps.length };
+  if (pendientes) {
+    log('  ' + pendientes + ' liga(s) quedaron para la proxima corrida: se acabo el presupuesto.');
+  }
+  return { added, leidas, sinResolver, pendientes, total: corpus.maps.length };
 }
 
 /**
