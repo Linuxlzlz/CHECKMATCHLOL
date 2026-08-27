@@ -50,6 +50,24 @@ import { validateIndex, validateAcross, readValidation } from './engine/validati
 const $ = (s) => document.querySelector(s);
 
 /**
+ * Pestaña virtual "En vivo": junta los partidos en curso de TODAS las ligas.
+ *
+ * Con 15 ligas configuradas, un partido en curso en LJL o LRS es invisible
+ * salvo que uno adivine en qué pestaña mirar. Esto lo pone en un solo lugar.
+ *
+ * No es una liga de verdad: no tiene calendario ni torneo ni standings. La
+ * lista sale de getLive(), que ya se consulta cada 20 segundos para el
+ * indicador de la cabecera.
+ */
+const LIVE_KEY = 'LIVE';
+const LIVE_TAB = { key: LIVE_KEY, id: null, name: 'En vivo', region: 'todas las ligas' };
+const esEnVivo = (l) => l?.key === LIVE_KEY;
+
+/** Las ligas de la barra: la virtual primero, después las reales. */
+const TABS = [LIVE_TAB, ...LEAGUES];
+
+
+/**
  * Tabla de Elo del corpus entero, memoizada.
  *
  * Los mapas se deduplican por gameId porque los índices de distintos torneos
@@ -83,6 +101,8 @@ const AXIS_LABEL = {
 
 const state = {
   league: LEAGUES[0],
+  liveNuestras: 0,
+  ligaVivo: null,
   tournament: null,
   events: [],
   olderToken: null,
@@ -142,7 +162,7 @@ function parseRoute(hash) {
   if (parts[0] === 'registro') return { view: 'ledger' };
   // Ruta oculta: no está enlazada en ningún lado, se llega escribiéndola.
   if (parts[0] === 'wire') return { view: 'wire' };
-  const league = LEAGUES.find((l) => l.key === parts[0]);
+  const league = TABS.find((l) => l.key === parts[0]);
   if (!league) return null;
   return { view: 'match', league, matchId: parts[1] ?? null, gameId: parts[2] ?? null };
 }
@@ -228,14 +248,21 @@ async function init() {
 }
 
 function renderLeagues() {
-  $('#leagues').innerHTML = LEAGUES.map(
-    (l) => `<button class="league-btn${l.key === state.league.key ? ' active' : ''}"
-              data-key="${l.key}">${esc(l.name)}<span class="reg">${esc(l.region)}</span></button>`
-  ).join('');
+  $('#leagues').innerHTML = TABS.map((l) => {
+    const activa = l.key === state.league.key;
+    // La pestaña de en vivo lleva el contador de partidos en curso, para que se
+    // vea que hay algo pasando sin tener que entrar.
+    const n = esEnVivo(l) ? (state.liveNuestras ?? 0) : 0;
+    const marca = esEnVivo(l)
+      ? `<span class="reg">${n ? `${n} en curso` : 'nada ahora'}</span>`
+      : `<span class="reg">${esc(l.region)}</span>`;
+    return `<button class="league-btn${activa ? ' active' : ''}${esEnVivo(l) ? ' league-live' : ''}${esEnVivo(l) && n ? ' hay-vivo' : ''}"
+              data-key="${l.key}">${esc(l.name)}${marca}</button>`;
+  }).join('');
   $('#leagues').querySelectorAll('.league-btn').forEach((b) =>
     b.addEventListener('click', () => {
       if (b.dataset.key === state.league.key) return;
-      state.league = LEAGUES.find((l) => l.key === b.dataset.key);
+      state.league = TABS.find((l) => l.key === b.dataset.key);
       state.view = 'match';
       state.matchId = null;
       state.gameId = null;
@@ -243,6 +270,9 @@ function renderLeagues() {
       renderLeagues();
       syncRoute({ push: true });
       loadLeague(state.league);
+      // El indicador de la cabecera depende de la pestaña abierta; sin esto se
+      // queda con el texto de la anterior hasta el próximo poll (20 s).
+      pollLive();
       $('#content').innerHTML = emptyState();
     })
   );
@@ -251,7 +281,9 @@ function renderLeagues() {
 const emptyState = () => `
   <div class="empty-state">
     <div class="empty-mark">🎯</div>
-    <h2>Elegí un partido de ${esc(state.league.name)}</h2>
+    <h2>${esEnVivo(state.league)
+      ? 'Elegí un partido en curso'
+      : `Elegí un partido de ${esc(state.league.name)}`}</h2>
     <p>El análisis se arma con el draft real del feed oficial.</p>
   </div>`;
 
@@ -264,6 +296,17 @@ async function loadLeague(league, { keepMatch = false } = {}) {
   $('#tournament-label').textContent = 'cargando…';
   if (!keepMatch) {
     $('#match-list').innerHTML = `<div class="skeleton-list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
+  }
+
+  // Vista en vivo: no hay calendario ni torneo que pedir. La lista sale de
+  // getLive(), que ya se consulta cada 20 s para el indicador de la cabecera.
+  if (esEnVivo(league)) {
+    state.tournament = null;
+    state.olderToken = null;
+    state.standings = null;
+    state.standingsPromise = Promise.resolve(null);
+    await cargarEnVivo();
+    return;
   }
 
   try {
@@ -296,6 +339,33 @@ async function loadLeague(league, { keepMatch = false } = {}) {
   }
 }
 
+
+/**
+ * Arma la lista de la vista "En vivo" con los partidos en curso de todas las
+ * ligas configuradas. Los eventos de getLive() traen su propia liga, así que se
+ * guarda para poder mostrarla en cada fila: en esta vista están mezcladas.
+ */
+// Etiqueta del encabezado en la pestaña de en vivo.
+function etiquetaVivo(n) {
+  return n ? `${n} partido${n === 1 ? '' : 's'} en curso` : 'ninguna liga con partidos ahora';
+}
+
+async function cargarEnVivo() {
+  try {
+    const data = await getLive();
+    const evs = (data?.data?.schedule?.events ?? [])
+      .filter((e) => e.match?.teams?.length === 2)
+      .filter((e) => LEAGUES.some((l) => l.id === e.league?.id));
+    state.events = evs;
+    state.liveNuestras = evs.length;
+    $('#tournament-label').textContent = etiquetaVivo(evs.length);
+    renderLeagues();
+    renderMatchList();
+  } catch (e) {
+    $('#match-list').innerHTML =
+      `<div class="card-body"><div class="err">No se pudo leer el estado en vivo: ${esc(e.message)}</div></div>`;
+  }
+}
 /** Trae una página más de calendario hacia atrás. */
 async function loadOlder() {
   if (!state.olderToken || state.loadingMore) return;
@@ -331,11 +401,14 @@ function renderMatchList() {
   }
   done.reverse();
 
-  const groups = [
-    ['En vivo', live],
-    ['Próximos', upcoming.slice(0, 15)],
-    ['Terminados', done],
-  ].filter(([, arr]) => arr.length);
+  const vivo = esEnVivo(state.league);
+  const groups = vivo
+    ? [['En vivo, todas las ligas', evs]].filter(([, arr]) => arr.length)
+    : [
+        ['En vivo', live],
+        ['Próximos', upcoming.slice(0, 15)],
+        ['Terminados', done],
+      ].filter(([, arr]) => arr.length);
 
   const head = `
     <div class="list-tools">
@@ -347,10 +420,15 @@ function renderMatchList() {
   const body = groups.length
     ? groups.map(([label, arr]) => `
         <div class="group-label">${label}<span class="group-n">${arr.length}</span></div>
-        ${arr.map((e) => matchItem(e, label === 'En vivo')).join('')}`).join('')
-    : `<div class="card-body"><p class="muted-xs">Sin partidos que coincidan.</p></div>`;
+        ${arr.map((e) => matchItem(e, vivo || label === 'En vivo', vivo)).join('')}`).join('')
+    : vivo
+      ? `<div class="card-body"><p class="muted-xs">No hay partidos en curso en ninguna de las 15 ligas.
+           Esta lista se actualiza sola cada 20 segundos.</p></div>`
+      : `<div class="card-body"><p class="muted-xs">Sin partidos que coincidan.</p></div>`;
 
-  const more = state.olderToken
+  const more = vivo
+    ? ''
+    : state.olderToken
     ? `<button class="btn btn-sm btn-outline list-more" id="load-older" ${state.loadingMore ? 'disabled' : ''}>
          ${state.loadingMore ? 'Cargando…' : 'Cargar partidos anteriores'}</button>`
     : `<div class="muted-xs list-more">No hay más partidos hacia atrás en el calendario.</div>`;
@@ -372,7 +450,7 @@ function renderMatchList() {
   );
 }
 
-function matchItem(e, isLive) {
+function matchItem(e, isLive, conLiga = false) {
   const [t1, t2] = e.match.teams;
   // Un partido sin empezar trae result {gameWins:0}; mostrar "0-0" ahí es ruido.
   const played = e.state === 'completed' || isLive;
@@ -388,6 +466,7 @@ function matchItem(e, isLive) {
       </div>
       <div class="match-meta">
         ${isLive ? '<span class="tag-live">● EN VIVO</span>' : `<span>${esc(when)}</span>`}
+        ${conLiga && e.league?.name ? `<span class="liga-tag">${esc(e.league.name)}</span>` : ''}
         ${score}
         <span>${esc(e.blockName ?? '')}</span>
       </div>
@@ -472,25 +551,39 @@ function setContent(html, { preserve = false } = {}) {
 async function pollLive() {
   try {
     const data = await getLive();
-    const evs = data?.data?.schedule?.events ?? [];
+    const evs = (data?.data?.schedule?.events ?? []).filter((e) => e.match?.teams?.length === 2);
+    const nuestras = evs.filter((e) => LEAGUES.some((l) => l.id === e.league?.id));
     const before = [...state.liveIds].sort().join(',');
     state.liveIds = new Set(evs.filter((e) => e.match?.id).map((e) => e.match.id));
     const changed = before !== [...state.liveIds].sort().join(',');
-    const mine = evs.filter((e) => e.league?.id === state.league.id);
+    const vivo = esEnVivo(state.league);
+    const mine = vivo ? nuestras : evs.filter((e) => e.league?.id === state.league.id);
     const pill = $('#live-pill');
-    if (evs.length) {
-      pill.hidden = false;
-      pill.className = mine.length ? 'pill pill-live' : 'pill pill-idle';
-      pill.textContent = mine.length
-        ? `${mine.length} en vivo en ${state.league.name}`
-        : `${evs.length} en vivo en otras ligas`;
+    pill.hidden = false;
+    if (mine.length) {
+      pill.className = 'pill pill-live';
+      pill.textContent = vivo
+        ? `${mine.length} en vivo ahora`
+        : `${mine.length} en vivo en ${state.league.name}`;
+    } else if (evs.length) {
+      pill.className = 'pill pill-idle';
+      pill.textContent = `${evs.length} en vivo en otras ligas`;
     } else {
-      pill.hidden = false;
       pill.className = 'pill pill-idle';
       pill.textContent = 'sin partidos en vivo';
     }
+    // El contador de la pestaña "En vivo" solo cuenta las ligas que seguimos.
+    if (state.liveNuestras !== nuestras.length) {
+      state.liveNuestras = nuestras.length;
+      renderLeagues();
+    }
+    // Estando en la pestaña de en vivo, la lista ES el resultado del poll.
+    if (vivo) {
+      state.events = nuestras;
+      $('#tournament-label').textContent = etiquetaVivo(nuestras.length);
+    }
     // No repintar la lista mientras se escribe en el filtro: perdería el foco.
-    if (changed && document.activeElement?.id !== 'match-search') renderMatchList();
+    if ((changed || vivo) && document.activeElement?.id !== 'match-search') renderMatchList();
     // Si el partido abierto está en vivo, refrescamos su estado.
     if (state.view === 'match' && state.matchId && state.liveIds.has(state.matchId)) {
       openMatch(state.matchId, { quiet: true });
@@ -676,6 +769,39 @@ function renderWire() {
  * partido
  * ------------------------------------------------------------------ */
 
+/**
+ * La liga "de trabajo". En la pestaña de en vivo `state.league` no tiene id, así
+ * que el índice del torneo usa la liga real del partido abierto.
+ */
+function ligaActiva() {
+  if (!esEnVivo(state.league)) return state.league;
+  const ev = state.events.find((e) => e.match?.id === state.matchId);
+  return LEAGUES.find((l) => l.id === ev?.league?.id) ?? state.league;
+}
+
+/**
+ * En la pestaña de en vivo cada fila es de una liga distinta, así que el torneo
+ * y la tabla de posiciones se cargan al abrir el partido, no al abrir la lista.
+ * Sin esto la calidad de equipos —el componente que más pesa— entraría vacía
+ * justo en los partidos que más importan.
+ */
+async function contextoEnVivo(matchId) {
+  const ev = state.events.find((e) => e.match?.id === matchId);
+  const liga = LEAGUES.find((l) => l.id === ev?.league?.id);
+  if (!liga || state.ligaVivo === liga.key) return;
+  state.ligaVivo = liga.key;
+  state.tournament = null;
+  state.standings = null;
+  const t = await getCurrentTournament(liga.id).catch(() => null);
+  state.tournament = t;
+  state.standingsPromise = t?.id
+    ? getStandings(t.id)
+        .then((s) => { state.standings = s; return s; })
+        .catch(() => { state.standings = null; return null; })
+    : Promise.resolve(null);
+  autoIndex();
+}
+
 async function openMatch(matchId, { quiet = false, force = false, gameId = null, push = false, fromRoute = false } = {}) {
   const changed = state.matchId !== matchId;
   state.view = 'match';
@@ -688,6 +814,8 @@ async function openMatch(matchId, { quiet = false, force = false, gameId = null,
   if (!quiet && changed) {
     setContent(`<div class="card"><div class="card-body"><p class="muted">Cargando partido…</p></div></div>`);
   }
+
+  if (esEnVivo(state.league)) await contextoEnVivo(matchId);
 
   try {
     const det = await getEventDetails(matchId);
@@ -2451,7 +2579,8 @@ const progressHTML = (p) => `
  * se vuelve a armar cuando termina.
  */
 async function autoIndex() {
-  const tid = state.tournament?.id ?? state.league.id;
+  const tid = state.tournament?.id ?? ligaActiva().id;
+  if (!tid) return;
   if (state.metaBuilding || state.autoIndexTried.has(tid)) return;
   state.autoIndexTried.add(tid);
 
@@ -2706,8 +2835,9 @@ async function runMetaIndex(btn, { force = false } = {}) {
   };
 
   try {
-    state.metaIndex = await buildTournamentIndex(state.league.id, state.tournament, {
-      league: state.league,
+    const ligaIdx = ligaActiva();
+    state.metaIndex = await buildTournamentIndex(ligaIdx.id, state.tournament, {
+      league: ligaIdx,
       force,
       onProgress: paint,
     });

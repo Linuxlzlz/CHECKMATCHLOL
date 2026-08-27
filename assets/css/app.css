@@ -99,6 +99,18 @@ button { font: inherit; cursor: pointer; }
 }
 .league-btn .reg { display: block; font-size: 9.5px; font-weight: 500; opacity: .7; }
 
+/* La pestaña de en vivo va primera y separada: con 15 ligas, un partido de LJL
+   o LRS es invisible salvo que uno adivine en qué pestaña está. */
+.league-btn.league-live {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--bg-raise); border-color: var(--line);
+  margin-right: 6px; box-shadow: 6px 0 8px -6px rgba(0,0,0,.45);
+}
+.league-btn.league-live.hay-vivo { color: #ff7b7b; border-color: #ff7b7b55; }
+.league-btn.league-live.hay-vivo .reg { opacity: 1; animation: pulse 2s infinite; }
+.league-btn.league-live.active { color: #06101d; background: var(--accent); border-color: var(--accent); }
+.league-btn.league-live.active .reg { animation: none; }
+
 /* Con 15 ligas la barra scrollea. Se marca el borde derecho para que se vea
    que hay más y nadie se pierda media lista. */
 .leagues { scrollbar-width: thin; scroll-behavior: smooth; }
@@ -146,6 +158,11 @@ button { font: inherit; cursor: pointer; }
 .match-meta { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 11px; color: var(--text-mute); }
 .score { font-family: var(--mono); color: var(--gold); font-weight: 700; }
 .tag-live { color: #ff7b7b; font-weight: 700; }
+.liga-tag {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .3px;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-raise); border: 1px solid var(--line); color: var(--text-dim);
+}
 
 /* ---------- content ---------- */
 
