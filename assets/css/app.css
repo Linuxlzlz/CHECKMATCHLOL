@@ -408,6 +408,9 @@ button { font: inherit; cursor: pointer; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 14px;
 }
 .sum-cell { min-width: 0; }
+/* El escalado va bajo el número de teamfight, más apagado: no es una segunda
+   predicción, es la condición "si esto se estira". */
+.sum-cell .esc-line { margin-top: 2px; font-size: 11px; opacity: .8; }
 .sum-k {
   font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-mute); font-weight: 700; margin-bottom: 3px;

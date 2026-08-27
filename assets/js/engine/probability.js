@@ -685,7 +685,13 @@ export function buildProbability({
   const rawP = sigmoid(x);
   // Sin estado de partida el techo es más bajo: el modelo nunca demostró
   // discriminar por encima del 75% antes de que empiece el mapa.
-  const previa = goldDiff === null || goldDiff === undefined || !minute;
+  // En un mapa TERMINADO el estado se excluye arriba, así que lo que queda ES
+  // una lectura previa y le toca el tope previo. Antes `previa` miraba solo si
+  // había oro y minuto —que en un mapa terminado los hay— y el número salía con
+  // el techo de partida en curso (98%). Por eso se veían lecturas previas de
+  // 77%: por encima del 75% que el modelo demostró poder sostener. Y son
+  // justamente esos números los que alimentan la calibración.
+  const previa = finished || goldDiff === null || goldDiff === undefined || !minute;
   const techo = previa ? CLAMP.preGameMax : CLAMP.pMax;
   const piso = previa ? 1 - CLAMP.preGameMax : CLAMP.pMin;
   const p = Math.max(piso, Math.min(techo, rawP));

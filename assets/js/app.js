@@ -1341,6 +1341,13 @@ function cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnost
 
   const edge = edges[0];
 
+  // El eje de escalado es el ÚNICO del índice que pasó su prueba condicional:
+  // 55.7% en el tercio de partidas más largas contra 51.5% en el más corto, de
+  // forma monotónica (evidence.js -> escalado). No puede mover la probabilidad
+  // previa porque la duración no se sabe antes de jugar, pero sí merece estar a
+  // la vista: la tarjeta mostraba solo teamfight, que es el eje medido en 50.0%.
+  const escalado = score.perAxis?.find((a) => a.axis === 'scaling') ?? null;
+
   return `
   <div class="card summary">
     <div class="card-body">
@@ -1354,6 +1361,10 @@ function cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnost
           <div class="sum-k">Δ teamfight</div>
           <div class="sum-v ${tierClass}">${score.tfDelta >= 0 ? '+' : ''}${score.tfDelta.toFixed(2)} sd</div>
           <div class="muted-xs">banda ${esc(score.tfBand.label)} · ${tier === 'coin' ? 'no usar como señal' : `favorece a ${esc(score.tfFavors)}`}</div>
+          ${escalado && Math.abs(escalado.dz) >= 0.5
+            ? `<div class="muted-xs esc-line">escalado ${escalado.dz >= 0 ? '+' : '-'}${Math.abs(escalado.dz).toFixed(2)} sd
+                 · si se estira, ${esc(escalado.favors)}</div>`
+            : ''}
         </div>
         <div class="sum-cell">
           <div class="sum-k">Dónde se decide</div>
