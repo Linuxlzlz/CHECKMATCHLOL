@@ -272,11 +272,31 @@ export const SIDE = { minMapas: 100, K: 200, piso: 0.50, techo: 0.62 };
 
 export function sideRateFrom(corpus) {
   const maps = corpus?.maps ?? [];
-  if (maps.length < SIDE.minMapas) return null;
-  const azul = maps.filter((m) => m.w === 'blue').length;
-  const cruda = azul / maps.length;
+
+  // SOLO primeros mapas.
+  //
+  // Del mapa 2 en adelante el lado no se sortea: lo elige el perdedor del mapa
+  // anterior, y elige azul el 88% de las veces. Un winrate de azul medido sobre
+  // TODOS los mapas mide "gana el que venía ganando", que es fuerza de equipo
+  // —lo que el modelo ya cuenta en Elo y en récord—, no ventaja de lado.
+  //
+  // Esto estaba midiendo sobre todos los mapas y devolvía 54.9%, que el modelo
+  // usaba en lugar del 51.7% honesto medido sobre 867 primeros mapas. La
+  // diferencia no es cosmética: logit(0.549)=0.197 contra logit(0.517)=0.068,
+  // casi el triple, aplicado a TODAS las predicciones y siempre hacia azul. En
+  // el registro en vivo el modelo eligió azul en 24 de 35 mapas.
+  //
+  // El campo `n` se guarda desde hace tiempo justo para esto ("el lado solo se
+  // sortea en el primero", más arriba) y nunca se había usado. Si todavía no
+  // hay bastantes primeros mapas identificables, se devuelve null y el modelo
+  // cae a la medición honesta que ya tiene, que es lo correcto.
+  const primeros = maps.filter((m) => m.n === 1);
+  if (primeros.length < SIDE.minMapas) return null;
+
+  const azul = primeros.filter((m) => m.w === 'blue').length;
+  const cruda = azul / primeros.length;
   // Encoge hacia 50%: un corpus chico no puede afirmar una ventaja grande.
-  const encogida = 0.5 + (cruda - 0.5) * (maps.length / (maps.length + SIDE.K));
+  const encogida = 0.5 + (cruda - 0.5) * (primeros.length / (primeros.length + SIDE.K));
   const acotada = Math.min(SIDE.techo, Math.max(SIDE.piso, encogida));
-  return { p: acotada, cruda, n: maps.length };
+  return { p: acotada, cruda, n: primeros.length, deTodos: maps.length };
 }

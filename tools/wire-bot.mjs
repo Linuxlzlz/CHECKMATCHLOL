@@ -333,7 +333,14 @@ async function deliverFree(pending) {
   // ligas, una tanda de avisos juntos pasa ese techo y empiezan los 429. Se
   // manda de a poco y con pausa: no hay apuro, el partido ya terminó.
   // Igual que el tope de publicación: es por corrida, no por sondeo.
-  const max = Math.max(0, num(process.env.WIRE_MAX_NOTIFY, 8) - runBudget.notified);
+  // Tope por corrida. Estaba en 8, dimensionado para 6 ligas.
+  //
+  // El freno real de Discord es ~5 peticiones cada 2 s por webhook, y acá se
+  // espera 1300 ms entre avisos: 0.77/s, muy por debajo. O sea que 8 no protegía
+  // de Discord, solo recortaba la tanda. Con 15 ligas las tandas se juntan y lo
+  // recortado se pierde: los "pre" caducan a los 45 min y no llegan a la corrida
+  // siguiente. 20 avisos son ~60 s dentro de un job que tiene 28 min.
+  const max = Math.max(0, num(process.env.WIRE_MAX_NOTIFY, 20) - runBudget.notified);
   const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
   // Volver a mandar algo ya avisado. Se usa al cambiar el diseño de la tarjeta:
   // sin esto, lo viejo queda entregado con el formato de ayer y no hay forma de
@@ -699,8 +706,19 @@ async function runOnce({ cycle = 0 } = {}) {
     return edadMin(p) <= limite;
   };
 
-  const todas = wire.queue().filter((p) => !p.posted).reverse(); // más viejas primero
-  const pending = todas.filter(vigente);
+  // El orden de entrega era por antigüedad pura y eso es una inversión de
+  // prioridad: un aviso PREVIO caduca a los 45 min, un resumen tiene 12 h de
+  // margen, y el previo esperaba detrás igual. Con 15 ligas las tandas se
+  // juntan (LCK, LCKC y LCP juegan a la misma hora) y el tope por corrida deja
+  // gente afuera. Medido sobre la cola remota: 12 entradas nunca se enviaron y
+  // vencieron, y las 12 eran "pre". Cero "post" perdidos.
+  //
+  // Se ordena por lo que queda de la ventana propia de cada una, no por cuándo
+  // se creó: primero lo que está por vencerse.
+  const fusibleMin = (p) => (p.kind === 'pre' ? maxPreMin : maxPostH * 60);
+  const restanteMin = (p) => fusibleMin(p) - edadMin(p);
+  const todas = wire.queue().filter((p) => !p.posted);
+  const pending = todas.filter(vigente).sort((a, b) => restanteMin(a) - restanteMin(b));
   const vencidas = todas.length - pending.length;
   console.log(`Pendientes: ${pending.length}${vencidas ? ` (${vencidas} descartadas por antigüedad)` : ''}`);
   if (vencidas) {

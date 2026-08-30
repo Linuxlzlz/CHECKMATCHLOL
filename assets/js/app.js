@@ -1066,7 +1066,19 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
         }),
     // Si hay corpus propio, la ventaja de lado sale de ahí; si no, de la
     // medición congelada en data/evidence.js.
-    sideRate: validation?.usable && validation.side?.n >= 100 ? validation.side.p : null,
+    // El winrate de lado del índice NO entra al modelo.
+    //
+    // `validation.side` se calcula sobre TODOS los mapas del torneo y nació
+    // como control de sanidad del resolutor de ganadores, que es para lo que
+    // sirve. Como entrada del modelo mide otra cosa: del mapa 2 en adelante el
+    // lado lo elige el perdedor del mapa anterior (azul el 88% de las veces),
+    // así que ese winrate es fuerza de equipo disfrazada de lado, y el modelo
+    // ya la cuenta en Elo y en récord. Contarla acá la contaba por tercera vez,
+    // siempre hacia azul.
+    //
+    // El modelo tiene su propia medición limpia sobre 867 PRIMEROS mapas
+    // (51.7%), mucho mejor sostenida que lo que puede dar un torneo suelto.
+    sideRate: null,
   });
   const stance = bettingStance({ p: prob.p, marketP: null });
 

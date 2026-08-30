@@ -71,7 +71,26 @@ export const TEAM_TAGS = {
   PAIN: '#PAINWIN',
 };
 
-export const teamTag = (code) => TEAM_TAGS[code] ?? `#${String(code ?? '').replace(/[^A-Za-z0-9]/g, '')}`;
+/**
+ * Hashtag del equipo.
+ *
+ * La tabla va por código, y los códigos NO son únicos: en la API hay 97
+ * duplicados, y entre ellos están justo los que seguimos. `HLE` son tres
+ * equipos (Hanwha Life de LCK, HLE Challengers de LCK CL y HLE Academy);
+ * `DK`, `BFX`, `FUR`, `DFM` y `FLA` igual. Sin mirar la liga, un mapa de LCK
+ * Challengers salía a Discord con el hashtag del equipo de la liga mayor, que
+ * es de otro plantel. Con 22 de los últimos posts en LCKC, pasaba seguido.
+ *
+ * En las ligas de cantera se usa el genérico: es peor no etiquetar que
+ * etiquetar a otro.
+ */
+const LIGAS_CANTERA = new Set(['LCKC']);
+
+export const teamTag = (code, leagueKey = null) => {
+  const generico = `#${String(code ?? '').replace(/[^A-Za-z0-9]/g, '')}`;
+  if (leagueKey && LIGAS_CANTERA.has(leagueKey)) return generico;
+  return TEAM_TAGS[code] ?? generico;
+};
 
 const pct = (p) => `${Math.round(p * 100)}%`;
 
@@ -356,8 +375,8 @@ export function preMatchTweet(ctx) {
 
   const tags = [
     ...(LEAGUE_TAGS[league?.key] ?? []),
-    teamTag(blue.team),
-    teamTag(red.team),
+    teamTag(blue.team, league?.key),
+    teamTag(red.team, league?.key),
     '#LoLEsports',
   ];
 
@@ -394,8 +413,8 @@ export function postMatchTweet(ctx) {
 
   const tags = [
     ...(LEAGUE_TAGS[league?.key] ?? []),
-    teamTag(win.team),
-    teamTag(lose.team),
+    teamTag(win.team, league?.key),
+    teamTag(lose.team, league?.key),
     '#LoLEsports',
   ];
 

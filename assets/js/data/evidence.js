@@ -201,6 +201,35 @@ export const EVIDENCE = {
    * ya no: la regla no separa ganadores. Queda como lectura del draft, que es
    * para lo que sirve, y no como pronóstico.
    */
+
+  /**
+   * La conjunción: teamfight Y escalado apuntando al MISMO lado.
+   *
+   * Es la lectura natural de la tarjeta —dos señales de acuerdo— y la única
+   * forma del reclamo que no estaba medida. Se armó un corpus propio: 553 mapas
+   * con draft y ganador resuelto, sacando el draft del feed para cada uno.
+   *
+   *   los dos de acuerdo, cualquier delta   51.9% [45, 58]  n=214
+   *   los dos de acuerdo, ambos |dz|>=0.5   52.3% [45, 60]  n=176
+   *   los dos de acuerdo, ambos |dz|>=1     47.0% [35, 59]  n=66
+   *
+   * Va al revés de lo que predice la hipótesis: cuanto MÁS fuerte el acuerdo,
+   * peor acierta. Y en los tres subconjuntos "siempre azul" gana por más:
+   * 57.5%, 57.5% y 62.1% respectivamente.
+   *
+   * El ajuste libre de pesos, con corte cronológico (387 entrena / 166 evalúa),
+   * cierra el caso: teamfight 0.019, escalado 0.006. El modelo ya usa 0.02 para
+   * el draft. El acierto fuera de muestra es 56.0% con y sin los ejes: agregar
+   * el draft no da vuelta ni una sola predicción del conjunto de prueba.
+   */
+  conjuncionTfEscalado: {
+    deAcuerdo: { p: 0.519, n: 214, low: 0.45, high: 0.58 },
+    deAcuerdoFuerte: { p: 0.470, n: 66, low: 0.35, high: 0.59 },
+    pesoAjustadoTeamfight: 0.019,
+    pesoAjustadoEscalado: 0.006,
+    pesoEnUso: 0.02,
+    conclusion: 'sin valor incremental; el peso actual ya es el que sostienen los datos',
+  },
   bandaGrande: { p: 0.494, n: 1256, low: 0.467, high: 0.522, afirmacionOriginal: 0.74 },
 
   /**
