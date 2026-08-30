@@ -86,8 +86,9 @@ export const TEAM_TAGS = {
  */
 const LIGAS_CANTERA = new Set(['LCKC']);
 
-export const teamTag = (code, leagueKey = null) => {
+export const teamTag = (code, leagueKey = null, { lema = true } = {}) => {
   const generico = `#${String(code ?? '').replace(/[^A-Za-z0-9]/g, '')}`;
+  if (!lema) return generico;
   if (leagueKey && LIGAS_CANTERA.has(leagueKey)) return generico;
   return TEAM_TAGS[code] ?? generico;
 };
@@ -414,7 +415,11 @@ export function postMatchTweet(ctx) {
   const tags = [
     ...(LEAGUE_TAGS[league?.key] ?? []),
     teamTag(win.team, league?.key),
-    teamTag(lose.team, league?.key),
+    // El perdedor va SIN lema. Los hashtags de equipo son consignas de hinchada
+    // y casi todas terminan en "WIN" (#FNCWIN, #PAINWIN, #BRONWIN). Ponerle la
+    // del perdedor a un resultado hace que el mensaje diga "Gana GX" y abajo
+    // "#FNCWIN", que es exactamente al revés de lo que pasó.
+    teamTag(lose.team, league?.key, { lema: false }),
     '#LoLEsports',
   ];
 
@@ -428,9 +433,17 @@ export function postMatchTweet(ctx) {
   const mvpLine = mvp
     ? `MVP ${mvp.name.replace(/^\S+\s+/, '')} (${mvp.champion}) ${mvp.kills}/${mvp.deaths}/${mvp.assists} · ${pct(mvp.shareDamage)} del daño · ${mvp.rating.toFixed(1)}/10`
     : null;
-  const oppLine = mvp?.goldVsOpp != null && Math.abs(mvp.goldVsOpp) >= 1500
+  // La línea del rival directo del MVP repite la clave del mapa cuando las dos
+  // hablan del mismo hueco de oro, que es lo habitual: al MVP suele elegirlo
+  // justo esa diferencia. En el post de VKS salió "3883 de oro sobre su rival"
+  // y dos líneas después "+3883 de oro sobre Nocturne". Si el número ya está
+  // arriba, esta línea no agrega nada.
+  const oppBruto = mvp?.goldVsOpp != null && Math.abs(mvp.goldVsOpp) >= 1500
     ? `${mvp.goldVsOpp >= 0 ? '+' : ''}${mvp.goldVsOpp.toLocaleString('es')} de oro sobre ${mvp.opponent.champion}`
     : null;
+  const yaDicho = oppBruto && keyFact
+    && keyFact.includes(Math.abs(mvp.goldVsOpp).toLocaleString('es'));
+  const oppLine = yaDicho ? null : oppBruto;
 
   return {
     kind: 'post',

@@ -252,8 +252,36 @@ async function sendTelegram(post, token, chatId, card) {
   if (!r.ok) throw new Error(`telegram ${r.status}: ${(await r.text()).slice(0, 160)}`);
 }
 
+/**
+ * Da formato de Discord al texto, que nació con forma de tweet.
+ *
+ * Iba envuelto en un bloque de código, y eso lo dejaba en monoespaciada, sin
+ * jerarquía y con los hashtags muertos: en el canal se veía como un volcado
+ * pegado. `fit()` compone SIEMPRE igual —titular, cuerpo, línea en blanco,
+ * hashtags— así que se puede separar sin adivinar.
+ */
+function cuerpoDiscord(text) {
+  const lineas = String(text ?? '').split('\n');
+  // Los titulares arrancan con ✅ o 🔴, nunca con '#', así que mirar la última
+  // línea alcanza y no hace falta el largo.
+  const tags = lineas.length && lineas[lineas.length - 1].trim().startsWith('#')
+    ? lineas.pop().trim()
+    : null;
+  while (lineas.length && !lineas[lineas.length - 1].trim()) lineas.pop();
+  const titular = (lineas.shift() ?? '').trim();
+  const cuerpo = lineas.filter((l) => l.trim());
+  return [
+    titular ? `**${titular}**` : null,
+    ...cuerpo,
+    tags ? `-# ${tags}` : null,
+  ].filter(Boolean).join('\n');
+}
+
 async function sendDiscord(post, webhook, card) {
-  const payload = { content: `\`\`\`\n${post.text}\n\`\`\`${intentFooter(post.text)}` };
+  // Si por lo que sea el formateo queda vacío, va el texto crudo: Discord
+  // rechaza un mensaje sin contenido ni adjunto.
+  const cuerpo = cuerpoDiscord(post.text) || String(post.text ?? '').trim() || '(sin texto)';
+  const payload = { content: `${cuerpo}${intentFooter(post.text)}` };
 
   // Con tarjeta va como archivo adjunto, que Discord muestra grande. Sin ella,
   // se cae a los logos sueltos como antes.
