@@ -1582,6 +1582,7 @@ function cardDraft(blue, red, lanes, rosterA, rosterB) {
     <div class="card-head"><h3>Draft</h3>
       <span class="muted-xs">mapeo por esportsTeamId, no por posición en el HUD</span></div>
     <div class="card-body">
+      <div class="tabla-scroll">
       <table class="draft-table">
         <thead><tr>
           <th><span class="side-blue">● ${esc(blue.team)}</span> <span class="team-side side-blue">lado azul</span></th>
@@ -1590,6 +1591,7 @@ function cardDraft(blue, red, lanes, rosterA, rosterB) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      </div>
       ${subsNote.length ? `<div class="note note-warn">Fuera del roster listado: ${esc(subsNote.join(' · '))}.
         Un suplente y un pick raro se ven igual en la capa de jugador y no son lo mismo.
         El roster que devuelve la API es el vigente, no el del día del partido.</div>` : ''}
@@ -1726,7 +1728,11 @@ function cardIndex(score) {
     const w = Math.abs(pct) * 50;
     const left = pct >= 0 ? 50 : 50 - w;
     const th = ax.threshold;
-    const flag = ax.narratable
+    // El aviso de "no narrable" explica que hay diferencia pero es demasiado
+    // chica para contarla. En un EMPATE exacto no hay nada que explicar: decir
+    // "parejo", "no narrable" y "umbral por defecto: 1 pts" es el mismo hecho
+    // tres veces, y llenaba la columna hasta romperla.
+    const flag = ax.narratable || ax.dRaw === 0
       ? ''
       : `<div class="axis-flag">no narrable
            <span class="th-src ${th?.source === 'medido' ? 'medido' : ''}">${th?.source === 'medido'
@@ -1740,7 +1746,7 @@ function cardIndex(score) {
           <div class="fill" style="left:${left}%;width:${w}%;background:${pct >= 0 ? 'var(--blue)' : 'var(--red)'}"></div>
         </div>
         <div class="axis-val">
-          ${ax.dz >= 0 ? '+' : ''}${ax.dz.toFixed(2)} sd · ${ax.dRaw >= 0 ? '+' : ''}${ax.dRaw.toFixed(1)} pts
+          <span class="axis-nums">${ax.dz >= 0 ? '+' : ''}${ax.dz.toFixed(2)} sd · ${ax.dRaw >= 0 ? '+' : ''}${ax.dRaw.toFixed(1)} pts</span>
           <span class="axis-team">${ax.favors ? esc(ax.favors) : 'parejo'}</span>
           ${flag}
         </div>

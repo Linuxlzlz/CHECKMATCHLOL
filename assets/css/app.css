@@ -207,6 +207,11 @@ button { font: inherit; cursor: pointer; }
 .game-tab:disabled { opacity: .35; cursor: not-allowed; }
 
 /* draft table */
+/* La tabla de draft tiene un ancho mínimo mayor que un teléfono (nombre de
+   campeón, jugador y las fichas de ejes), así que empujaba el scroll horizontal
+   a la PÁGINA entera. Que scrollee ella sola dentro de su caja. */
+.tabla-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tabla-scroll .draft-table { min-width: 340px; }
 .draft-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .draft-table th {
   text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
@@ -246,7 +251,7 @@ button { font: inherit; cursor: pointer; }
 .band-coin { color: var(--text-mute); }
 
 .axis-row {
-  display: grid; grid-template-columns: 94px 1fr 118px; gap: 12px; align-items: center;
+  display: grid; grid-template-columns: 94px 1fr 150px; gap: 12px; align-items: center;
   padding: 7px 0; border-top: 1px solid var(--line-soft); font-size: 13px;
 }
 .axis-row:first-of-type { border-top: 0; }
@@ -258,12 +263,29 @@ button { font: inherit; cursor: pointer; }
 /* El nombre del equipo al que favorece cada eje. La barra ya decía el lado con
    el color, pero eso obliga a recordar quién juega de azul. */
 .axis-team {
-  display: inline-block; margin-left: 6px; padding: 0 5px;
+  display: inline-block; margin-top: 3px; padding: 0 5px;
   border-radius: 4px; font-size: 10.5px; font-weight: 700;
   background: var(--bg-raise); border: 1px solid var(--line); color: var(--text-dim);
 }
 .axis-val { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); text-align: right; }
+/* Los números van en una sola línea: partir "+0.00 sd · +0.0 pts" a la mitad
+   dejaba un "pts" suelto abajo. La etiqueta del equipo baja a su propio renglón. */
+.axis-nums { display: block; white-space: nowrap; }
 .axis-flag { font-size: 10px; color: var(--warn); }
+
+/* En pantalla angosta el contenedor de la fila mide ~271px y las tres columnas
+   fijas se comían la barra entera: quedaba en 3 píxeles. Se apila: nombre y
+   valor arriba, barra a lo ancho debajo. */
+@media (max-width: 560px) {
+  .axis-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "nombre valor" "barra barra";
+    gap: 5px 10px;
+  }
+  .axis-name { grid-area: nombre; }
+  .axis-val  { grid-area: valor; }
+  .axis-bar  { grid-area: barra; }
+}
 
 /* generic list rows */
 .row {
