@@ -255,6 +255,13 @@ button { font: inherit; cursor: pointer; }
 .axis-bar .mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line); }
 .axis-bar .fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); }
 .axis-row.dim { opacity: .42; }
+/* El nombre del equipo al que favorece cada eje. La barra ya decía el lado con
+   el color, pero eso obliga a recordar quién juega de azul. */
+.axis-team {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  border-radius: 4px; font-size: 10.5px; font-weight: 700;
+  background: var(--bg-raise); border: 1px solid var(--line); color: var(--text-dim);
+}
 .axis-val { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); text-align: right; }
 .axis-flag { font-size: 10px; color: var(--warn); }
 

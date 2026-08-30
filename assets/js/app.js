@@ -1373,10 +1373,12 @@ function cardSummary({ score, prob, edges, blue, red, st, minute, game, diagnost
           <div class="sum-k">Δ teamfight</div>
           <div class="sum-v ${tierClass}">${score.tfDelta >= 0 ? '+' : ''}${score.tfDelta.toFixed(2)} sd</div>
           <div class="muted-xs">banda ${esc(score.tfBand.label)} · ${tier === 'coin' ? 'no usar como señal' : `favorece a ${esc(score.tfFavors)}`}</div>
-          ${escalado && Math.abs(escalado.dz) >= 0.5
-            ? `<div class="muted-xs esc-line">escalado ${escalado.dz >= 0 ? '+' : '-'}${Math.abs(escalado.dz).toFixed(2)} sd
-                 · si se estira, ${esc(escalado.favors)}</div>`
-            : ''}
+          ${!escalado
+            ? ''
+            : escalado.dRaw === 0
+              ? `<div class="muted-xs esc-line">escalado parejo · ninguno gana si se estira</div>`
+              : `<div class="muted-xs esc-line">escalado ${escalado.dz >= 0 ? '+' : '-'}${Math.abs(escalado.dz).toFixed(2)} sd
+                   · si se estira, ${esc(escalado.favors)}</div>`}
         </div>
         <div class="sum-cell">
           <div class="sum-k">Dónde se decide</div>
@@ -1739,6 +1741,7 @@ function cardIndex(score) {
         </div>
         <div class="axis-val">
           ${ax.dz >= 0 ? '+' : ''}${ax.dz.toFixed(2)} sd · ${ax.dRaw >= 0 ? '+' : ''}${ax.dRaw.toFixed(1)} pts
+          <span class="axis-team">${ax.favors ? esc(ax.favors) : 'parejo'}</span>
           ${flag}
         </div>
       </div>`;
