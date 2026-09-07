@@ -107,14 +107,29 @@ function cargarCorpusElo() {
   return _corpusPromise;
 }
 
-let _elo = null;
-let _eloFirma = '';
-function eloTable() {
+/**
+ * Tabla de Elo, opcionalmente cortada a una fecha.
+ *
+ * `hasta` existe por un problema de mirar el futuro. En un mapa YA JUGADO, la
+ * tarjeta muestra una "lectura previa": lo que se sabía antes de jugarlo. Pero
+ * el corpus incluye ese mismo mapa, así que el rating usado ya contenía su
+ * resultado — y el de toda la serie.
+ *
+ * Lo medí en DK vs T1 de los playoffs de LCK: con el corpus entero el Elo daba
+ * 1512 contra 1528 y T1 salía favorito, pero esos 1528 son en buena parte las
+ * tres victorias de T1 EN ESA SERIE. Una lectura previa que ya sabe el
+ * resultado no es una lectura previa, es un resumen disfrazado.
+ *
+ * Con `hasta` se construye sólo con lo anterior a esa fecha. Para un mapa en
+ * curso o futuro no hace falta y se pasa null.
+ */
+const _eloCache = new Map();
+function eloTable(hasta = null) {
   const idx = cachedIndices();
-  // La firma incluye el corpus: cuando termina de bajar hay que rehacer la tabla.
-  const firma = `c${_corpusMaps ? _corpusMaps.length : -1}|` +
+  const firma = `c${_corpusMaps ? _corpusMaps.length : -1}|h${hasta ?? ''}|` +
     idx.map((i) => `${i.tournamentId ?? i.id ?? ''}:${(i.maps || []).length}`).join('|');
-  if (_elo && firma === _eloFirma) return _elo;
+  if (_eloCache.has(firma)) return _eloCache.get(firma);
+
   const vistos = new Set();
   const maps = [];
   // El corpus va primero: es el que tiene historia larga. Los índices locales
@@ -122,13 +137,18 @@ function eloTable() {
   for (const fuente of [_corpusMaps ?? [], ...idx.map((i) => i.maps || [])]) {
     for (const m of fuente) {
       if (!m.gameId || vistos.has(m.gameId)) continue;
+      // Estrictamente ANTERIOR: un mapa del mismo día se descarta igual, porque
+      // los otros mapas de la serie son justamente los que contaminan.
+      if (hasta && String(m.date ?? '') >= String(hasta)) continue;
       vistos.add(m.gameId);
       maps.push(m);
     }
   }
-  _elo = buildElo(maps);
-  _eloFirma = firma;
-  return _elo;
+  const tabla = buildElo(maps);
+  // La caché no puede crecer sin techo: una por fecha visitada alcanza y sobra.
+  if (_eloCache.size > 24) _eloCache.clear();
+  _eloCache.set(firma, tabla);
+  return tabla;
 }
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1068,14 +1088,28 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
     ? { a: ctA.wr, b: ctB.wr, gamesA: ctA.games, gamesB: ctB.games }
     : null;
 
-  // Elo sobre todo el corpus indexado. Reemplaza al récord y al winrate por
-  // mapa cuando está disponible: mide lo mismo pero ponderando contra quién
-  // jugó cada equipo, y fuera de muestra le gana a los dos.
+  // Elo sobre todo el corpus. Reemplaza al récord y al winrate por mapa cuando
+  // está disponible: mide lo mismo pero ponderando contra quién jugó cada
+  // equipo, y fuera de muestra le gana a los dos.
   //
-  // eloTable() está memoizada por tamaño de corpus: recorrer 2000 mapas en cada
-  // render es barato pero no gratis, y el corpus solo cambia al indexar.
-  const eloA = eloFor(eloTable(), blue.teamId);
-  const eloB = eloFor(eloTable(), red.teamId);
+  // El corte por fecha es para no mirar el futuro. En un mapa YA JUGADO el
+  // corpus contiene ese mapa y los demás de la serie, así que el rating de la
+  // "lectura previa" venía sabiendo el resultado. Medido en DK vs T1 de los
+  // playoffs de LCK: con el corpus entero el Elo daba 1512 contra 1528 y T1
+  // salía favorito, pero esos 1528 son en buena parte las tres victorias de T1
+  // en esa misma serie. Para un mapa en curso no hay nada que cortar.
+  const fechaCorte = (() => {
+    if (game?.state !== 'completed') return null;   // en curso: nada que cortar
+    // getEventDetails no trae startTime; la entrada del calendario sí, y si no
+    // está, el primer frame de la ventana es el arranque del mapa.
+    const enCalendario = state.events.find((e) => e.match?.id === state.matchId)?.startTime;
+    const delFeed = win?.frames?.[0]?.rfc460Timestamp;
+    const fecha = enCalendario ?? delFeed ?? null;
+    return fecha ? String(fecha).slice(0, 10) : null;
+  })();
+  const tablaElo = eloTable(fechaCorte);
+  const eloA = eloFor(tablaElo, blue.teamId);
+  const eloB = eloFor(tablaElo, red.teamId);
   // Días sin jugar del más oxidado de los dos: después de un parón largo el
   // rating describe a un equipo que pudo cambiar de roster, parche y meta.
   // Medido: a partir de 45 días el modelo acierta 38% en vez de 62%.
