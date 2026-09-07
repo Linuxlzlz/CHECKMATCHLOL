@@ -139,7 +139,12 @@ function eloTable(hasta = null) {
       if (!m.gameId || vistos.has(m.gameId)) continue;
       // Estrictamente ANTERIOR: un mapa del mismo día se descarta igual, porque
       // los otros mapas de la serie son justamente los que contaminan.
-      if (hasta && String(m.date ?? '') >= String(hasta)) continue;
+      //
+      // Sin fecha también se descarta. Los índices guardan `date: g.date ?? null`
+      // y un null no permite demostrar que el mapa sea anterior; dejándolo pasar,
+      // un mapa posterior sin fecha se colaba y devolvía la contaminación que
+      // este corte existe para evitar.
+      if (hasta && !(m.date && String(m.date) < String(hasta))) continue;
       vistos.add(m.gameId);
       maps.push(m);
     }
