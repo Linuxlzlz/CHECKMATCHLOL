@@ -73,16 +73,54 @@ const TABS = [LIVE_TAB, ...LEAGUES];
  * Los mapas se deduplican por gameId porque los índices de distintos torneos
  * pueden solaparse, y un mapa contado dos veces movería el rating el doble.
  */
+/**
+ * Corpus de Elo del bot, servido como archivo estático.
+ *
+ * La web armaba el Elo SOLO con lo que el navegador tuviera indexado: para un
+ * torneo suelto son ~30 mapas por equipo, y con esa muestra los ratings casi no
+ * se despegan de 1500. El bot, en cambio, usa tools/elo-corpus.json, que hoy
+ * tiene 1575 mapas de 13 ligas. O sea que las dos mitades del proyecto
+ * predecían distinto el mismo partido, y la peor era la que se ve.
+ *
+ * Caso que lo destapó — DK vs T1, playoffs LCK, con DK de azul en los 4 mapas:
+ *
+ *   Elo del índice   1499 vs 1503  ->  -0.048   la ventaja de lado (+0.068) gana
+ *                                               y DK sale favorito los 4 mapas
+ *   Elo del corpus   1512 vs 1528  ->  -0.181   se impone al lado: favorito T1
+ *
+ * T1 ganó 3-1. El archivo pesa 170 KB y se pide una sola vez.
+ */
+let _corpusPromise = null;
+let _corpusMaps = null;
+function cargarCorpusElo() {
+  if (_corpusPromise) return _corpusPromise;
+  const url = new URL('tools/elo-corpus.json', document.baseURI);
+  _corpusPromise = fetch(url)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      _corpusMaps = (j?.maps ?? [])
+        .filter((m) => m?.g && m?.d && m?.b && m?.r && m?.w)
+        .map((m) => ({ gameId: m.g, date: m.d, blueTeamId: m.b, redTeamId: m.r, winner: m.w }));
+      return _corpusMaps;
+    })
+    .catch(() => { _corpusMaps = []; return _corpusMaps; });
+  return _corpusPromise;
+}
+
 let _elo = null;
 let _eloFirma = '';
 function eloTable() {
   const idx = cachedIndices();
-  const firma = idx.map((i) => `${i.tournamentId ?? i.id ?? ''}:${(i.maps || []).length}`).join('|');
+  // La firma incluye el corpus: cuando termina de bajar hay que rehacer la tabla.
+  const firma = `c${_corpusMaps ? _corpusMaps.length : -1}|` +
+    idx.map((i) => `${i.tournamentId ?? i.id ?? ''}:${(i.maps || []).length}`).join('|');
   if (_elo && firma === _eloFirma) return _elo;
   const vistos = new Set();
   const maps = [];
-  for (const i of idx) {
-    for (const m of i.maps || []) {
+  // El corpus va primero: es el que tiene historia larga. Los índices locales
+  // suman lo que el corpus todavía no alcanzó (el bot lo reconstruye por tramos).
+  for (const fuente of [_corpusMaps ?? [], ...idx.map((i) => i.maps || [])]) {
+    for (const m of fuente) {
       if (!m.gameId || vistos.has(m.gameId)) continue;
       vistos.add(m.gameId);
       maps.push(m);
@@ -1009,6 +1047,10 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   // El componente que más pesa. Se espera de verdad antes de calcular: si se
   // colaba un render sin standings, la predicción quedaba congelada sin él.
   if (state.standingsPromise) await state.standingsPromise.catch(() => null);
+  // El corpus de Elo se espera igual que los standings: si el primer render se
+  // hiciera sin él, la predicción quedaría congelada con la tabla flaca del
+  // índice — que es exactamente el caso DK vs T1.
+  await cargarCorpusElo();
   const recA = findRecord(blue) ?? recordDelCalendario(blue) ?? blue.record;
   const recB = findRecord(red) ?? recordDelCalendario(red) ?? red.record;
   // Fuerza de equipo medida por mapa en el corpus. Es lo único que le ganó a la
