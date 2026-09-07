@@ -522,14 +522,18 @@ export function buildProbability({
     // reconoce, pero no suma: ya está contado, y mejor, dentro del Elo.
     components.push({
       id: 'quality',
-      label: 'Calidad de equipos (récord)',
+      label: 'Calidad de equipos (récord de SERIES)',
       detail: `${(waCrudo * 100).toFixed(0)}% contra ${(wbCrudo * 100).toFixed(0)}% · ` +
         `${recordA.wins + recordA.losses} y ${recordB.wins + recordB.losses} series`,
       contrib: 0,
       excluded: true,
       note:
-        'No entra: el Elo ya mide fuerza de equipo, y la mide mejor. En el ajuste conjunto fuera ' +
-        'de muestra el récord se queda con peso cero cuando el Elo está disponible.',
+        'No entra, y la diferencia suele ser MAYOR de lo que parece acá. Este récord es de ' +
+        'SERIES; el modelo predice MAPAS, que no es lo mismo: ganar 2-1 tres veces es 100% de ' +
+        'series y 67% de mapas. Caso real: DK llegó a estos playoffs con 75% de series contra ' +
+        '38% de T1, pero por mapa era 53% contra 58% — o sea al revés. El Elo, que cuenta por ' +
+        'mapa, los puso 1512 contra 1528 y T1 ganó la serie 3-1. Por eso manda el Elo: no es que ' +
+        'ignore el récord, es que lo mide en la unidad correcta.',
     });
   } else if (eloDelta === null) {
     components.push({

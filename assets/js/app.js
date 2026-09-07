@@ -1009,8 +1009,8 @@ async function renderMatch(ev, force, { preserve = false } = {}) {
   // El componente que más pesa. Se espera de verdad antes de calcular: si se
   // colaba un render sin standings, la predicción quedaba congelada sin él.
   if (state.standingsPromise) await state.standingsPromise.catch(() => null);
-  const recA = findRecord(blue) ?? blue.record;
-  const recB = findRecord(red) ?? red.record;
+  const recA = findRecord(blue) ?? recordDelCalendario(blue) ?? blue.record;
+  const recB = findRecord(red) ?? recordDelCalendario(red) ?? red.record;
   // Fuerza de equipo medida por mapa en el corpus. Es lo único que le ganó a la
   // línea base fuera de muestra, así que entra al número.
   const teamRow = (id) => {
@@ -1264,6 +1264,35 @@ function lateTimestamp(startTs) {
   if (!startTs) return feedTimestamp(0);
   const end = new Date(startTs).getTime() + 60 * 60 * 1000;
   return feedTimestamp(0, Math.min(end, Date.now() - 90_000));
+}
+
+/**
+ * Récord publicado por la liga dentro del propio calendario.
+ *
+ * Cuatro de las quince ligas —LCP, PCS, LJL y TCL— devuelven standings vacías.
+ * Sin récord, el componente de calidad de equipos (el de mayor peso, y casi
+ * todo el margen) entra en cero: un mapa de LCP salía 52%, una moneda al aire
+ * con pasos extra. Pero el calendario SÍ trae el récord pegado a cada equipo de
+ * cada evento — 80 de 80 eventos en LCP, PCS y LJL; 78 de 80 en TCL.
+ *
+ * El bot ya lo usaba (wire.js -> teamForm) y la web no, así que la web venía
+ * dando peores números que el bot en esas mismas ligas.
+ *
+ * Va como REEMPLAZO de las standings vacías, no como preferencia: el calendario
+ * sirve el récord actual en todos los eventos, no el del día de cada partido,
+ * igual que las standings. Para un mapa ya jugado las dos miran el futuro por
+ * igual, así que el orden entre ellas no cambia nada.
+ */
+function recordDelCalendario(side) {
+  const ev = state.events.find((e) => e.match?.id === state.matchId);
+  for (const t of ev?.match?.teams ?? []) {
+    if (t.id === side.teamId || t.code === side.team) {
+      const r = t.record;
+      // Un 0-0 de bracket de playoffs no es información, es un casillero vacío.
+      return r && (r.wins ?? 0) + (r.losses ?? 0) > 0 ? r : null;
+    }
+  }
+  return null;
 }
 
 function findRecord(side) {

@@ -222,6 +222,37 @@ export const EVIDENCE = {
    * el draft. El acierto fuera de muestra es 56.0% con y sin los ejes: agregar
    * el draft no da vuelta ni una sola predicción del conjunto de prueba.
    */
+  /**
+   * El registro en vivo, ya con muestra de verdad: 197 mapas propios entre el
+   * 23/08 y el 6/09, sobre 11 ligas.
+   *
+   *   modelo       132/197 = 67.0% [60, 73]   Brier 0.2208
+   *   lado azul    116/197 = 58.9% [52, 66]
+   *   teamfight     85/155 = 54.8% [47, 62]
+   *
+   * Es la primera vez que el modelo le gana a sus dos alternativas con los
+   * intervalos separados del 50%, y el Brier queda claramente por debajo del
+   * 0.2500 de tirar una moneda. Con 35 mapas esto era 51.4% y Brier 0.2578; la
+   * diferencia es muestra, no un cambio de modelo.
+   *
+   * Las ligas SIN standings (LCP, PCS, LJL, TCL) aciertan igual que el resto:
+   * 68% [51, 80] contra 67% [59, 74]. El bot deriva el récord del calendario;
+   * la web no lo hacía, y por eso mostraba números peores en esas mismas ligas.
+   *
+   * CALIBRACIÓN: por tramos se ve torcida —donde dice 53% gana 67%, donde dice
+   * 75% gana 91%—, pero un escalado de Platt ajustado sobre los 137 más viejos
+   * EMPEORA los 60 más nuevos (Brier 0.2242 contra 0.2205, acierto 66.7%
+   * contra 70.0%). O sea que el desvío no es estable: es ruido de tramo, no un
+   * sesgo que se pueda corregir todavía. No se aplica.
+   */
+  registroEnVivo: {
+    n: 197, desde: '2026-08-23', hasta: '2026-09-06', ligas: 11,
+    modelo: { p: 0.670, low: 0.60, high: 0.73, brier: 0.2208 },
+    ladoAzul: { p: 0.589, low: 0.52, high: 0.66 },
+    teamfight: { p: 0.548, n: 155, low: 0.47, high: 0.62 },
+    plattFueraDeMuestra: { a: 1.152, b: 0.200, brierCon: 0.2242, brierSin: 0.2205, aplicado: false },
+  },
+
   conjuncionTfEscalado: {
     deAcuerdo: { p: 0.519, n: 214, low: 0.45, high: 0.58 },
     deAcuerdoFuerte: { p: 0.470, n: 66, low: 0.35, high: 0.59 },

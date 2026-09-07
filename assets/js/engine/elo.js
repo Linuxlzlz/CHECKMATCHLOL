@@ -92,7 +92,40 @@ export function buildElo(maps, opts = {}) {
     ultimo.set(A, m.date);
     ultimo.set(B, m.date);
   }
-  return { ratings, partidas, ultimo };
+
+  // Componentes conexas del grafo "jugó contra".
+  //
+  // Un rating Elo sólo significa algo DENTRO de un grupo que se haya enfrentado.
+  // Entre dos grupos que nunca se cruzaron, los dos parten de 1500 y derivan por
+  // separado: restar sus ratings no mide nada, y sin embargo el número sale
+  // igual de convincente. Medido sobre el corpus del 7/09 —1575 mapas, 116
+  // equipos— hay 7 componentes y sólo el 27.3% de los pares son comparables. La
+  // isla grande son 56 equipos (la unió MSI); quedan seis sueltas de 8 a 14.
+  //
+  // Importa ahora y no en abstracto: en Worlds se cruzan regiones que en el
+  // corpus no se tocan.
+  const componente = new Map();
+  const vecinos = new Map();
+  const unir = (a, b) => {
+    if (!vecinos.has(a)) vecinos.set(a, new Set());
+    vecinos.get(a).add(b);
+  };
+  for (const m of orden) { unir(m.blueTeamId, m.redTeamId); unir(m.redTeamId, m.blueTeamId); }
+  let idComp = 0;
+  for (const raiz of vecinos.keys()) {
+    if (componente.has(raiz)) continue;
+    const pila = [raiz];
+    componente.set(raiz, idComp);
+    while (pila.length) {
+      const x = pila.pop();
+      for (const y of vecinos.get(x) ?? []) {
+        if (!componente.has(y)) { componente.set(y, idComp); pila.push(y); }
+      }
+    }
+    idComp++;
+  }
+
+  return { ratings, partidas, ultimo, componente };
 }
 
 /**
@@ -160,6 +193,11 @@ export function stalenessFactor(dias) {
 export function eloLogOdds(a, b, { escala = ELO_PARAMS.escala, dias = null } = {}) {
   if (a?.rating == null || b?.rating == null) return null;
   if ((a.partidas ?? 0) < MIN_PARTIDAS_ELO || (b.partidas ?? 0) < MIN_PARTIDAS_ELO) return null;
+  // Si nunca se cruzaron —ni siquiera a través de terceros— los dos ratings
+  // salieron del mismo 1500 y derivaron por separado: la resta no mide fuerza,
+  // mide cuánto se alejó cada isla de su propio punto de partida. Devuelve null,
+  // que el modelo ya sabe leer como "no sé" y lo hace caer al récord.
+  if (a.componente != null && b.componente != null && a.componente !== b.componente) return null;
   return ((a.rating - b.rating) / escala) * stalenessFactor(dias);
 }
 
@@ -172,5 +210,6 @@ export function eloFor(tabla, teamId) {
     rating,
     partidas: tabla.partidas?.get(teamId) ?? 0,
     ultimo: tabla.ultimo?.get(teamId) ?? null,
+    componente: tabla.componente?.get(teamId) ?? null,
   };
 }
