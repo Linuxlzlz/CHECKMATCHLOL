@@ -368,7 +368,7 @@ async function deliverFree(pending) {
   // de Discord, solo recortaba la tanda. Con 15 ligas las tandas se juntan y lo
   // recortado se pierde: los "pre" caducan a los 45 min y no llegan a la corrida
   // siguiente. 20 avisos son ~60 s dentro de un job que tiene 28 min.
-  const max = Math.max(0, num(process.env.WIRE_MAX_NOTIFY, 20) - runBudget.notified);
+  const max = Math.max(0, topeDeCorrida(num(process.env.WIRE_MAX_NOTIFY, 20)) - runBudget.notified);
   const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
   // Volver a mandar algo ya avisado. Se usa al cambiar el diseño de la tarjeta:
   // sin esto, lo viejo queda entregado con el formato de ayer y no hay forma de
@@ -565,6 +565,26 @@ let _sideRate = null;
 
 const runBudget = { posted: 0, notified: 0 };
 
+/**
+ * Los topes de volumen, escalados a lo que dura la corrida de verdad.
+ *
+ * WIRE_MAX_NOTIFY y WIRE_MAX_PER_RUN se escribieron cuando una corrida duraba
+ * ~30 min, así que "por corrida" y "por media hora" eran la misma cosa. Al
+ * llevar la ventana a 5 h dejaron de serlo, y el mismo número pasó a significar
+ * diez veces menos: WIRE_MAX_NOTIFY=20 caía de 17 avisos por hora a 4. O sea
+ * que el cambio hecho para sacar el desfase lo habría empeorado.
+ *
+ * Se leen como tope POR CADA 30 MINUTOS de vigilancia y se multiplican por los
+ * tramos que dure la ventana. Así el valor que alguien puso en la variable
+ * sigue significando lo mismo que cuando lo puso.
+ */
+const TRAMO_MIN = 30;
+function tramosDeVigilancia() {
+  const ventana = num(process.env.WIRE_WATCH_MINUTES, 0);
+  return Math.max(1, Math.ceil((ventana || TRAMO_MIN) / TRAMO_MIN));
+}
+const topeDeCorrida = (valor) => valor * tramosDeVigilancia();
+
 async function runOnce({ cycle = 0 } = {}) {
   // Modo comprobación: no toca las ligas ni la cola, solo valida las llaves.
   if (String(process.env.WIRE_VERIFY ?? '').toLowerCase() === 'true') {
@@ -711,13 +731,15 @@ async function runOnce({ cycle = 0 } = {}) {
   }
   const live = String(process.env.WIRE_LIVE ?? "").toLowerCase() === "true";
 
-  // El tope es POR CORRIDA, no por sondeo.
+  // El tope es POR CORRIDA, no por sondeo, y escalado a la ventana (ver
+  // topeDeCorrida): con la vigilancia en 5 h, "por corrida" ya no es "por media
+  // hora" y el número puesto en la variable significaría diez veces menos.
   //
   // Con la vigilancia continua, runOnce() se ejecuta ~16 veces en una corrida de
   // 25 minutos. Si el tope se leyera acá tal cual, un WIRE_MAX_PER_RUN=1 se
   // convertiría en 16 publicaciones por corrida y quemaría la cuota diaria de X
   // en una sola pasada. El presupuesto se descuenta entre sondeos.
-  const maxPerRun = Math.max(0, num(process.env.WIRE_MAX_PER_RUN, 4) - runBudget.posted);
+  const maxPerRun = Math.max(0, topeDeCorrida(num(process.env.WIRE_MAX_PER_RUN, 4)) - runBudget.posted);
   const withMedia = String(process.env.WIRE_MEDIA ?? 'true').toLowerCase() === 'true';
 
   // Filtro de antigüedad, para no publicar el pasado como si fuera el presente.
