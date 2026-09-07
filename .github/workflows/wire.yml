@@ -6,23 +6,25 @@ name: wire
 
 on:
   schedule:
-    # Cada 30 minutos, NO cada 5.
+    # OJO: este cron es una SUGERENCIA que GitHub casi nunca cumple.
     #
-    # Con la vigilancia continua cada corrida dura ~20 min, así que pedir una
-    # cada 5 apilaba corridas: medido sobre 39, se solaparon 18 —hasta 21 min en
-    # paralelo— y 11 terminaron en fallo. Dos corridas a la vez leen el mismo
-    # `notified`, las dos creen que el aviso está pendiente y las dos lo mandan.
-    # Ese era el origen de los avisos repetidos en Discord.
+    # Medido sobre las últimas 60 corridas programadas: el hueco real entre una
+    # y otra fue de 100 a 481 minutos, con MEDIANA de 185. Ni uno solo bajó de
+    # 60. O sea que pedir "cada 30" da, en la práctica, una corrida cada tres
+    # horas. Los eventos `schedule` son best-effort y se descartan cuando la
+    # cola de runners está cargada.
     #
-    # La cobertura no la da el cron sino WIRE_WATCH_MINUTES, que sondea por
-    # dentro. 30 de intervalo contra 20 de ventana deja aire para que una
-    # termine y guarde antes de que arranque la siguiente.
+    # Por eso la cobertura NO la da el cron: la da WIRE_WATCH_MINUTES, que
+    # sondea por dentro. Con la ventana en 5 h, cualquier disparo que llegue
+    # dentro de ese rango encadena con el anterior y no queda hueco.
     - cron: '*/30 * * * *'
   workflow_dispatch:        # para correrlo a mano desde la pestaña Actions
 
 concurrency:
   # Dos corridas a la vez pelearían por el archivo de estado y podrían publicar
-  # dos veces lo mismo.
+  # dos veces lo mismo. Con `false` la siguiente ESPERA en vez de cancelar a la
+  # que corre, así que cuando esta termina la que esperaba arranca enseguida:
+  # eso es lo que encadena la cobertura.
   group: wire
   cancel-in-progress: false
 
@@ -33,7 +35,9 @@ jobs:
   wire:
     runs-on: ubuntu-latest
     # La corrida vigila 25 min por dentro; el margen cubre instalación y publicación.
-    timeout-minutes: 28
+    # La vigilancia interna dura 5 h; el margen cubre instalación y guardado.
+    # El techo de un job en runner alojado es 6 h.
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +51,16 @@ jobs:
         continue-on-error: true
         run: npm install --no-audit --no-fund
 
+      - name: Guardar el estado cada 15 min mientras vigila
+        # La corrida dura hasta 5 h y el commit iba sólo al final: si se caía o
+        # se pasaba del tiempo se perdían horas de "ya avisado", y lo ya
+        # entregado volvía a salir. Este guardado de fondo acota esa pérdida a
+        # 15 minutos.
+        run: |
+          nohup bash -c 'while true; do sleep 900; bash tools/guardar-estado.sh || true; done' \
+            > /tmp/guardado-periodico.log 2>&1 &
+          echo "guardado periódico en marcha (cada 15 min)"
+
       - name: Generar y publicar
         continue-on-error: true   # aunque falle, hay que guardar lo ya avisado
         env:
@@ -57,7 +71,7 @@ jobs:
           WIRE_LIVE: ${{ vars.WIRE_LIVE }}
           # Vigilancia continua dentro de la corrida. Ver el comentario en wire-bot.mjs:
           # el cron de Actions no cumple su frecuencia y esto es lo que la reemplaza.
-          WIRE_WATCH_MINUTES: ${{ vars.WIRE_WATCH_MINUTES || '20' }}
+          WIRE_WATCH_MINUTES: ${{ vars.WIRE_WATCH_MINUTES || '300' }}
           WIRE_POLL_SECONDS: ${{ vars.WIRE_POLL_SECONDS || '90' }}
           WIRE_VERIFY: ${{ vars.WIRE_VERIFY }}
           WIRE_LEAGUES: ${{ vars.WIRE_LEAGUES }}
@@ -94,37 +108,4 @@ jobs:
 
       - name: Guardar el estado de la cola y el corpus de Elo
         if: always()   # aunque el bot falle, lo ya avisado tiene que quedar registrado
-        run: |
-          # Si esto no guarda, la corrida siguiente vuelve a mandar lo mismo:
-          # perder el registro de "ya avisado" es exactamente el bug de los
-          # avisos repetidos en Discord.
-          set -u
-          ARCHIVOS="tools/wire-state.json tools/elo-corpus.json tools/results-log.json"
-          if [ -z "$(git status --porcelain $ARCHIVOS)" ]; then
-            echo "sin cambios en el estado"; exit 0
-          fi
-          git config user.name  "checkmatch-wire"
-          git config user.email "wire@users.noreply.github.com"
-
-          for intento in 1 2 3 4 5; do
-            git add $ARCHIVOS
-            if git diff --cached --quiet; then echo "nada que commitear"; exit 0; fi
-            git commit -m "wire: estado de la cola [skip ci]"
-            if git push; then
-              echo "estado guardado (intento $intento)"; exit 0
-            fi
-
-            echo "push rechazado: otra corrida empujó primero. Uniendo en vez de descartar."
-            git fetch origin main
-            git show origin/main:tools/wire-state.json > /tmp/remoto-wire.json 2>/dev/null || echo '{}' > /tmp/remoto-wire.json
-            # Unir NUESTRO estado con el del remoto. Lo de los dos sobrevive.
-            node tools/merge-state.mjs /tmp/remoto-wire.json tools/wire-state.json
-            cp tools/wire-state.json /tmp/unido-wire.json
-            cp tools/elo-corpus.json /tmp/unido-corpus.json
-            # Alinearse con el remoto y volver a poner lo unido encima.
-            git reset --hard origin/main
-            cp /tmp/unido-wire.json tools/wire-state.json
-            cp /tmp/unido-corpus.json tools/elo-corpus.json
-          done
-          echo "no se pudo guardar el estado tras 5 intentos" >&2
-          exit 1
+        run: bash tools/guardar-estado.sh
